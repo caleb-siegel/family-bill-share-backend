@@ -17,7 +17,9 @@ load_dotenv()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key-change-in-production')
+# Use simple session for Vercel compatibility
 app.config['SESSION_TYPE'] = 'filesystem'
+app.config['SESSION_FILE_DIR'] = '/tmp'  # Use /tmp for Vercel
 Session(app)
 
 CORS(app, supports_credentials=True)
@@ -1985,6 +1987,15 @@ def automated_process():
     
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Simple health check endpoint."""
+    return jsonify({
+        "status": "healthy",
+        "message": "Backend is running",
+        "environment": os.getenv('FLASK_ENV', 'development')
+    })
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5001)
