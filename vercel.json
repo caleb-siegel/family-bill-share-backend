@@ -1,11 +1,10 @@
 {
   "version": 2,
-  "builds": [
-    {
-      "src": "wsgi.py",
-      "use": "@vercel/python"
+  "functions": {
+    "wsgi.py": {
+      "maxDuration": 30
     }
-  ],
+  },
   "routes": [
     {
       "src": "/(.*)",
@@ -14,10 +13,5 @@
   ],
   "env": {
     "FLASK_ENV": "production"
-  },
-  "functions": {
-    "wsgi.py": {
-      "maxDuration": 30
-    }
   }
 }
