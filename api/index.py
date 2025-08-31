@@ -9,17 +9,61 @@ from flask_session import Session
 import os
 import psycopg2
 import bcrypt
+import jwt
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from services.pdf_service import PDFService
 from parse_verizon import extract_charges_from_pdf
+from functools import wraps
 
 load_dotenv()
 
+# JWT helper functions
+def create_jwt_token(user_id, email):
+    """Create a JWT token for the user."""
+    payload = {
+        'user_id': user_id,
+        'email': email,
+        'exp': datetime.utcnow() + timedelta(days=7),  # Token expires in 7 days
+        'iat': datetime.utcnow()
+    }
+    return jwt.encode(payload, os.getenv('SECRET_KEY', 'your-secret-key-change-in-production'), algorithm='HS256')
+
+def decode_jwt_token(token):
+    """Decode and validate a JWT token."""
+    try:
+        payload = jwt.decode(token, os.getenv('SECRET_KEY', 'your-secret-key-change-in-production'), algorithms=['HS256'])
+        return payload
+    except jwt.ExpiredSignatureError:
+        return None
+    except jwt.InvalidTokenError:
+        return None
+
+def require_auth(f):
+    """Decorator to require JWT authentication."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        auth_header = request.headers.get('Authorization')
+        if not auth_header or not auth_header.startswith('Bearer '):
+            return jsonify({"error": "Missing or invalid authorization header"}), 401
+        
+        token = auth_header.split(' ')[1]
+        payload = decode_jwt_token(token)
+        
+        if not payload:
+            return jsonify({"error": "Invalid or expired token"}), 401
+        
+        # Add user info to request
+        request.user_id = payload['user_id']
+        request.user_email = payload['email']
+        
+        return f(*args, **kwargs)
+    return decorated_function
+
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key-change-in-production')
-# Use simple session for Vercel compatibility
-app.config['SESSION_TYPE'] = 'filesystem'
-app.config['SESSION_FILE_DIR'] = '/tmp'  # Use /tmp for Vercel
+# Use null session for Vercel serverless environment
+app.config['SESSION_TYPE'] = 'null'
 Session(app)
 
 CORS(app, supports_credentials=True)
@@ -262,12 +306,12 @@ def signin():
         if not check_password(data['password'], user_data[3]):
             return jsonify({"error": "Invalid email or password"}), 401
         
-        # Set session
-        session['user_id'] = user_data[0]
-        session['user_email'] = user_data[2]
+        # Create JWT token
+        token = create_jwt_token(user_data[0], user_data[2])
         
         return jsonify({
             "message": "Sign in successful",
+            "token": token,
             "user": {
                 "id": user_data[0],
                 "name": user_data[1],
@@ -281,29 +325,27 @@ def signin():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/auth/profile', methods=['GET'])
+@require_auth
 def get_profile():
     """Get the current user's complete profile."""
-    if 'user_id' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
-    
-    profile = get_user_profile(session['user_id'])
+    profile = get_user_profile(request.user_id)
     if not profile:
         return jsonify({"error": "User not found"}), 404
     
     return jsonify(profile)
 
 @app.route('/api/auth/signout', methods=['POST'])
+@require_auth
 def signout():
     """Sign out the current user."""
-    session.clear()
+    # With JWT, we don't need to clear anything server-side
+    # The client should discard the token
     return jsonify({"message": "Signed out successfully"})
 
 @app.route('/api/auth/check', methods=['GET'])
+@require_auth
 def check_auth():
     """Check if user is authenticated and return basic user info."""
-    if 'user_id' not in session:
-        return jsonify({"authenticated": False}), 401
-    
     try:
         conn = get_db_connection()
         if not conn:
@@ -314,18 +356,17 @@ def check_auth():
             SELECT id, name, email 
             FROM group_bill_automation.bill_automator_users 
             WHERE id = %s
-        """, (session['user_id'],))
+        """, (request.user_id,))
         
         user_data = cur.fetchone()
         
         if not user_data:
             cur.close()
             conn.close()
-            session.clear()
             return jsonify({"authenticated": False}), 401
         
         # Get full user profile data
-        profile = get_user_profile(session['user_id'])
+        profile = get_user_profile(request.user_id)
         
         cur.close()
         conn.close()

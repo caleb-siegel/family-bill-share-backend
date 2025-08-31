@@ -4,25 +4,31 @@
 
 1. **Missing API Structure**: Created proper `api/` directory structure for Vercel
 2. **Missing Vercel Configuration**: Created `vercel.json` file with correct function mapping
-3. **Session Configuration**: Updated to use `/tmp` directory for Vercel compatibility
+3. **Session Issues**: Replaced Flask-Session with JWT tokens for Vercel compatibility
 4. **Added Health Check**: Created `/api/health` endpoint for testing
 
 ## Files Created/Modified:
 
-- `backend/api/index.py` - Main Flask application (copied from app.py)
-- `backend/api/requirements.txt` - Python dependencies
+- `backend/api/index.py` - Main Flask application with JWT authentication
+- `backend/api/requirements.txt` - Python dependencies (added PyJWT)
 - `backend/api/services/` - PDF service directory
 - `backend/api/parse_verizon.py` - Verizon parsing module
 - `backend/vercel.json` - Vercel deployment configuration
-- `backend/app.py` - Updated session configuration (original file)
+- `frontend/family-bill-share/src/lib/api.ts` - Updated to use JWT tokens
+
+## Authentication Changes:
+
+- **Backend**: Switched from Flask-Session to JWT tokens
+- **Frontend**: Updated to send JWT tokens in Authorization headers
+- **Token Storage**: Tokens stored in localStorage for persistence
 
 ## Directory Structure:
 
 ```
 backend/
 ├── api/
-│   ├── index.py          # Main Flask app for Vercel
-│   ├── requirements.txt  # Dependencies
+│   ├── index.py          # Main Flask app with JWT auth
+│   ├── requirements.txt  # Dependencies (includes PyJWT)
 │   ├── services/         # PDF service
 │   └── parse_verizon.py  # Verizon parsing
 ├── vercel.json           # Vercel config
@@ -33,24 +39,19 @@ backend/
 
 1. **Deploy to Vercel** with these changes
 2. **Test Health Endpoint**: Visit `https://family-bill-share-backend.vercel.app/api/health`
-3. **Test Signin**: Should work as before
-4. **Test Check/Profile**: Should now work with the session fixes
-
-## Common Issues:
-
-- **Session Persistence**: Sessions now use `/tmp` directory which should work on Vercel
-- **Database Connection**: Make sure your `SQLALCHEMY_DATABASE_URI` environment variable is set in Vercel
-- **CORS**: Already configured to accept requests from your frontend
+3. **Test Signin**: Should return JWT token
+4. **Test Check/Profile**: Should work with JWT authentication
 
 ## Environment Variables Needed in Vercel:
 
 - `SQLALCHEMY_DATABASE_URI` - Your Supabase connection string
-- `SECRET_KEY` - A secure secret key for sessions
+- `SECRET_KEY` - A secure secret key for JWT signing
 - `FLASK_ENV` - Set to "production"
 
-## If Issues Persist:
+## Frontend Changes:
 
-1. Check Vercel deployment logs
-2. Test the health endpoint first
-3. Verify environment variables are set correctly
-4. Check if database connection is working
+The frontend now:
+- Stores JWT tokens in localStorage
+- Sends tokens in Authorization headers
+- Handles token expiration automatically
+- Uses `api.signin()`, `api.checkAuth()`, `api.getProfile()` for authentication
