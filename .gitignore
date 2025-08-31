@@ -8,3 +8,4 @@ __pycache__/
 venv/
 *.sqlite3
 .DS_Store
+verizon-bils/
