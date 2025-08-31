@@ -2,17 +2,32 @@
 
 ## Issues Fixed:
 
-1. **Missing WSGI Entry Point**: Created `wsgi.py` file
-2. **Missing Vercel Configuration**: Created `vercel.json` file
+1. **Missing API Structure**: Created proper `api/` directory structure for Vercel
+2. **Missing Vercel Configuration**: Created `vercel.json` file with correct function mapping
 3. **Session Configuration**: Updated to use `/tmp` directory for Vercel compatibility
 4. **Added Health Check**: Created `/api/health` endpoint for testing
 
 ## Files Created/Modified:
 
-- `backend/wsgi.py` - WSGI entry point for Vercel
+- `backend/api/index.py` - Main Flask application (copied from app.py)
+- `backend/api/requirements.txt` - Python dependencies
+- `backend/api/services/` - PDF service directory
+- `backend/api/parse_verizon.py` - Verizon parsing module
 - `backend/vercel.json` - Vercel deployment configuration
-- `backend/app.py` - Updated session configuration
-- `backend/requirements.txt` - Cleaned up dependencies
+- `backend/app.py` - Updated session configuration (original file)
+
+## Directory Structure:
+
+```
+backend/
+├── api/
+│   ├── index.py          # Main Flask app for Vercel
+│   ├── requirements.txt  # Dependencies
+│   ├── services/         # PDF service
+│   └── parse_verizon.py  # Verizon parsing
+├── vercel.json           # Vercel config
+└── app.py               # Original app (for local dev)
+```
 
 ## Testing Steps:
 
