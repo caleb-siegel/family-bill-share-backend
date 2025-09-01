@@ -247,29 +247,94 @@ def check_auth():
             conn.close()
             return jsonify({"authenticated": False}), 401
         
-        # Check if user has families
+        # Get user's families
         cur.execute("""
-            SELECT COUNT(*) 
+            SELECT id, family 
             FROM group_bill_automation.bill_automator_families 
-            WHERE user_id = %s
+            WHERE user_id = %s 
+            ORDER BY id
         """, (request.user_id,))
         
-        family_count = cur.fetchone()[0]
+        families = []
+        for family in cur.fetchall():
+            family_data = {
+                "id": family[0],
+                "family": family[1],
+                "line_mappings": []
+            }
+            
+            # Get family mappings (line names) for each family
+            cur.execute("""
+                SELECT id, line_id 
+                FROM group_bill_automation.bill_automator_family_mapping 
+                WHERE family_id = %s 
+                ORDER BY id
+            """, (family[0],))
+            
+            family_data["line_mappings"] = [
+                {"id": mapping[0], "line_id": mapping[1]} 
+                for mapping in cur.fetchall()
+            ]
+            
+            families.append(family_data)
         
-        # Check if user has emails
+        # Get user's emails
         cur.execute("""
-            SELECT COUNT(*) 
+            SELECT emails 
             FROM group_bill_automation.bill_automator_emails 
             WHERE user_id = %s
         """, (request.user_id,))
         
-        email_count = cur.fetchone()[0]
+        email_data = cur.fetchone()
+        emails = email_data[1] if email_data else []
+        
+        # Get user's line adjustments
+        cur.execute("""
+            SELECT id, transfer_amount, line_to_remove_from, line_to_add_to 
+            FROM group_bill_automation.bill_automator_line_discount_transfer_adjustment 
+            WHERE user_id = %s 
+            ORDER BY id
+        """, (request.user_id,))
+        
+        line_adjustments = [
+            {
+                "id": adj[0],
+                "transfer_amount": float(adj[1]) if adj[1] else 0,
+                "line_to_remove_from": adj[2],
+                "line_to_add_to": adj[3]
+            }
+            for adj in cur.fetchall()
+        ]
+        
+        # Get user's account reconciliation settings
+        cur.execute("""
+            SELECT reconciliation 
+            FROM group_bill_automation.bill_automator_accountwide_reconciliation 
+            WHERE user_id = %s
+        """, (request.user_id,))
+        
+        reconciliation_data = cur.fetchone()
+        reconciliation = reconciliation_data[1] if reconciliation_data else None
         
         cur.close()
         conn.close()
         
         # User is configured if they have at least one family and one email
-        is_configured = family_count > 0 and email_count > 0
+        is_configured = len(families) > 0 and len(emails) > 0
+        
+        # Create the full profile that the frontend expects
+        profile = {
+            "user": {
+                "id": user_data[0],
+                "name": user_data[1],
+                "email": user_data[2]
+            },
+            "families": families,
+            "emails": emails,
+            "line_adjustments": line_adjustments,
+            "reconciliation": reconciliation,
+            "is_configured": is_configured
+        }
         
         return jsonify({
             "authenticated": True,
@@ -278,11 +343,136 @@ def check_auth():
                 "name": user_data[1],
                 "email": user_data[2]
             },
+            "is_configured": is_configured,
+            "profile": profile
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/auth/profile', methods=['GET'])
+@require_auth
+def get_profile():
+    """Get the current user's complete profile."""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database connection failed"}), 500
+        
+        cur = conn.cursor()
+        
+        # Get user data
+        cur.execute("""
+            SELECT id, name, email 
+            FROM group_bill_automation.bill_automator_users 
+            WHERE id = %s
+        """, (request.user_id,))
+        
+        user_data = cur.fetchone()
+        
+        if not user_data:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "User not found"}), 404
+        
+        # Get user's families
+        cur.execute("""
+            SELECT id, family 
+            FROM group_bill_automation.bill_automator_families 
+            WHERE user_id = %s 
+            ORDER BY id
+        """, (request.user_id,))
+        
+        families = []
+        for family in cur.fetchall():
+            family_data = {
+                "id": family[0],
+                "family": family[1],
+                "line_mappings": []
+            }
+            
+            # Get family mappings (line names) for each family
+            cur.execute("""
+                SELECT id, line_id 
+                FROM group_bill_automation.bill_automator_family_mapping 
+                WHERE family_id = %s 
+                ORDER BY id
+            """, (family[0],))
+            
+            family_data["line_mappings"] = [
+                {"id": mapping[0], "line_id": mapping[1]} 
+                for mapping in cur.fetchall()
+            ]
+            
+            families.append(family_data)
+        
+        # Get user's emails
+        cur.execute("""
+            SELECT emails 
+            FROM group_bill_automation.bill_automator_emails 
+            WHERE user_id = %s
+        """, (request.user_id,))
+        
+        email_data = cur.fetchone()
+        emails = email_data[1] if email_data else []
+        
+        # Get user's line adjustments
+        cur.execute("""
+            SELECT id, transfer_amount, line_to_remove_from, line_to_add_to 
+            FROM group_bill_automation.bill_automator_line_discount_transfer_adjustment 
+            WHERE user_id = %s 
+            ORDER BY id
+        """, (request.user_id,))
+        
+        line_adjustments = [
+            {
+                "id": adj[0],
+                "transfer_amount": float(adj[1]) if adj[1] else 0,
+                "line_to_remove_from": adj[2],
+                "line_to_add_to": adj[3]
+            }
+            for adj in cur.fetchall()
+        ]
+        
+        # Get user's account reconciliation settings
+        cur.execute("""
+            SELECT reconciliation 
+            FROM group_bill_automation.bill_automator_accountwide_reconciliation 
+            WHERE user_id = %s
+        """, (request.user_id,))
+        
+        reconciliation_data = cur.fetchone()
+        reconciliation = reconciliation_data[1] if reconciliation_data else None
+        
+        cur.close()
+        conn.close()
+        
+        # User is configured if they have at least one family and one email
+        is_configured = len(families) > 0 and len(emails) > 0
+        
+        return jsonify({
+            "user": {
+                "id": user_data[0],
+                "name": user_data[1],
+                "email": user_data[2]
+            },
+            "families": families,
+            "emails": emails,
+            "line_adjustments": line_adjustments,
+            "reconciliation": reconciliation,
             "is_configured": is_configured
         })
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route('/api/auth/signout', methods=['POST'])
+@require_auth
+def signout():
+    """Sign out the current user."""
+    # With JWT, we don't need to clear anything server-side
+    # The client should discard the token
+    return jsonify({"message": "Signed out successfully"})
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5001)
