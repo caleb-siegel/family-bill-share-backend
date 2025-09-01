@@ -1054,6 +1054,7 @@ def parse_pdf():
         try:
             # Import parse_verizon functions
             import parse_verizon
+            import fitz
             
             # Extract charges using the same approach as parse_verizon.py
             account_wide_value, line_details = parse_verizon.extract_charges_from_pdf(pdf_bytes)
