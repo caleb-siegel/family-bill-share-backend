@@ -1039,25 +1039,38 @@ def save_line_discount_transfer():
 @require_auth
 def parse_pdf():
     """Parse a PDF bill and extract line details."""
+    print("=== PARSE PDF ENDPOINT CALLED ===")
     try:
         # Get the PDF file from the request
         if 'pdf' not in request.files:
+            print("ERROR: No PDF file in request.files")
             return jsonify({"error": "No PDF file provided"}), 400
         
         pdf_file = request.files['pdf']
+        print(f"PDF file received: {pdf_file.filename}")
+        
         if pdf_file.filename == '':
+            print("ERROR: Empty filename")
             return jsonify({"error": "No PDF file selected"}), 400
         
         # Read the PDF file into bytes
         pdf_bytes = pdf_file.read()
+        print(f"PDF bytes read: {len(pdf_bytes)} bytes")
         
         try:
+            print("Attempting to import parse_verizon...")
             # Import parse_verizon functions
             import parse_verizon
-            import fitz
+            print("parse_verizon imported successfully")
             
+            print("Attempting to import fitz...")
+            import fitz
+            print("fitz imported successfully")
+            
+            print("Calling extract_charges_from_pdf...")
             # Extract charges using the same approach as parse_verizon.py
             account_wide_value, line_details = parse_verizon.extract_charges_from_pdf(pdf_bytes)
+            print(f"PDF parsing completed. Account-wide value: {account_wide_value}, Line details count: {len(line_details)}")
             
             return jsonify({
                 "success": True,
@@ -1065,10 +1078,15 @@ def parse_pdf():
                 "line_details": line_details
             })
             
+        except ImportError as e:
+            print(f"IMPORT ERROR: {str(e)}")
+            return jsonify({"error": f"Import error: {str(e)}"}), 500
         except Exception as e:
+            print(f"PDF PARSING ERROR: {str(e)}")
             return jsonify({"error": f"Failed to parse PDF: {str(e)}"}), 500
     
     except Exception as e:
+        print(f"GENERAL ERROR: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
