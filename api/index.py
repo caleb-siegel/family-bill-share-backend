@@ -1671,6 +1671,30 @@ def automated_process():
         
         cur = conn.cursor()
         
+        # Check if user has complete configuration
+        cur.execute("""
+            SELECT 
+                (SELECT COUNT(*) FROM group_bill_automation.bill_automator_families WHERE user_id = %s) as family_count,
+                (SELECT COUNT(*) FROM group_bill_automation.bill_automator_emails WHERE user_id = %s) as email_count
+        """, (request.user_id, request.user_id))
+        
+        config_data = cur.fetchone()
+        family_count = config_data[0] or 0
+        email_count = config_data[1] or 0
+        
+        # Determine if user has complete configuration
+        has_complete_config = family_count > 0 and email_count > 0
+        
+        if not has_complete_config:
+            return jsonify({
+                "error": "Incomplete configuration",
+                "message": "Please configure families and email addresses before using automated processing",
+                "required_config": {
+                    "families": family_count,
+                    "emails": email_count
+                }
+            }), 400
+        
         # Get user's families and line mappings
         cur.execute("""
             SELECT f.id, f.family, fm.line_id, l.name as line_name, l.number as line_number, l.device as line_device
@@ -1683,6 +1707,13 @@ def automated_process():
         
         family_mappings = cur.fetchall()
         
+        # Additional check: ensure there are actual line mappings
+        if not family_mappings:
+            return jsonify({
+                "error": "No line mappings configured",
+                "message": "Please map lines to families before using automated processing"
+            }), 400
+        
         # Get user's emails
         cur.execute("""
             SELECT emails FROM group_bill_automation.bill_automator_emails 
@@ -1690,13 +1721,7 @@ def automated_process():
         """, (request.user_id,))
         
         email_record = cur.fetchone()
-        if not email_record or not email_record[0]:
-            return jsonify({
-                "error": "No email addresses configured",
-                "message": "Please configure email addresses before using automated processing"
-            }), 400
-        
-        emails = email_record[0]  # This is already a list of email addresses
+        emails = email_record[1] if email_record else []
         
         # Get user's email for sender
         cur.execute("""
@@ -1733,13 +1758,6 @@ def automated_process():
         
         cur.close()
         conn.close()
-        
-        # Check if user has complete configuration
-        if not family_mappings:
-            return jsonify({
-                "error": "Incomplete configuration",
-                "message": "Please configure families and line mappings before using automated processing"
-            }), 400
         
         # Step 1: Parse the PDF using the same approach as parse_verizon.py
         import tempfile
