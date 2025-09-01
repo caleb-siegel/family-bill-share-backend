@@ -1314,45 +1314,80 @@ def create_families():
 @app.route('/api/families', methods=['PUT'])
 @require_auth
 def update_families():
-    """Update families for the authenticated user."""
+    """Update families for the authenticated user while preserving mappings."""
+
     try:
         data = request.get_json()
         if not data or 'families' not in data or not isinstance(data['families'], list):
             return jsonify({"error": "Missing required field: families (must be an array)"}), 400
-        
+
         conn = get_db_connection()
         if not conn:
             return jsonify({"error": "Database connection failed"}), 500
-        
+
         cur = conn.cursor()
-        
-        # Delete existing families for this user
+
+        # Get existing families to preserve mappings
         cur.execute("""
-            DELETE FROM group_bill_automation.bill_automator_families 
+            SELECT id, family
+            FROM group_bill_automation.bill_automator_families
             WHERE user_id = %s
         """, (request.user_id,))
-        
-        # Insert new families
-        family_ids = []
+
+        existing_families = {}
+        for row in cur.fetchall():
+            existing_families[row[1]] = row[0]  # family_name -> family_id
+
+        print(f"PUT /api/families - Existing families: {existing_families}")
+        print(f"PUT /api/families - New families: {data['families']}")
+
+        families_data = []
+
+        # Process each family
         for family_name in data['families']:
-            cur.execute("""
-                INSERT INTO group_bill_automation.bill_automator_families 
-                (user_id, family, created_at, updated_at)
-                VALUES (%s, %s, NOW(), NOW())
-                RETURNING id
-            """, (request.user_id, family_name))
-            family_ids.append(cur.fetchone()[0])
-        
+            if family_name in existing_families:
+                # Family already exists, keep the existing ID
+                family_id = existing_families[family_name]
+                print(f"PUT - Preserving existing family: {family_name} (ID: {family_id})")
+                families_data.append({
+                    "id": family_id,
+                    "family": family_name
+                })
+            else:
+                # New family, insert it
+                print(f"PUT - Creating new family: {family_name}")
+                cur.execute("""
+                    INSERT INTO group_bill_automation.bill_automator_families (user_id, family, created_at, updated_at)
+                    VALUES (%s, %s, NOW(), NOW())
+                    RETURNING id, family
+                """, (request.user_id, family_name))
+
+                family_data = cur.fetchone()
+                families_data.append({
+                    "id": family_data[0],
+                    "family": family_data[1]
+                })
+
+        # Remove families that are no longer in the list
+        new_family_names = set(data['families'])
+        for existing_family_name, existing_family_id in existing_families.items():
+            if existing_family_name not in new_family_names:
+                # Delete the family (this will cascade delete mappings due to foreign key)
+                print(f"PUT - Removing family: {existing_family_name} (ID: {existing_family_id})")
+                cur.execute("""
+                    DELETE FROM group_bill_automation.bill_automator_families
+                    WHERE id = %s
+                """, (existing_family_id,))
+
         conn.commit()
         cur.close()
         conn.close()
-        
+
         return jsonify({
-            "message": f"Families updated successfully",
-            "families": data['families'],
-            "family_ids": family_ids
-        })
-        
+            "message": "Families updated successfully",
+            "families": families_data
+        }), 200
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
