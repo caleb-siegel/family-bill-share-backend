@@ -1271,50 +1271,80 @@ def parse_pdf():
 @app.route('/api/families', methods=['POST'])
 @require_auth
 def create_families():
-    """Create families for the authenticated user."""
+    """Create or update families for the authenticated user while preserving mappings."""
+
     try:
         data = request.get_json()
         if not data or 'families' not in data or not isinstance(data['families'], list):
             return jsonify({"error": "Missing required field: families (must be an array)"}), 400
-        
+
         conn = get_db_connection()
         if not conn:
             return jsonify({"error": "Database connection failed"}), 500
-        
+
         cur = conn.cursor()
-        
-        # Check for existing families to avoid duplicates
+
+        # Get existing families to preserve mappings
         cur.execute("""
-            SELECT family FROM group_bill_automation.bill_automator_families 
+            SELECT id, family
+            FROM group_bill_automation.bill_automator_families
             WHERE user_id = %s
         """, (request.user_id,))
-        
-        existing_families = {row[0] for row in cur.fetchall()}
-        
-        # Insert only new families
-        family_ids = []
-        new_families = []
+
+        existing_families = {}
+        for row in cur.fetchall():
+            existing_families[row[1]] = row[0]  # family_name -> family_id
+
+        print(f"POST /api/families - Existing families: {existing_families}")
+        print(f"POST /api/families - New families: {data['families']}")
+
+        families_data = []
+
+        # Process each family
         for family_name in data['families']:
-            if family_name not in existing_families:
+            if family_name in existing_families:
+                # Family already exists, keep the existing ID
+                family_id = existing_families[family_name]
+                print(f"Preserving existing family: {family_name} (ID: {family_id})")
+                families_data.append({
+                    "id": family_id,
+                    "family": family_name
+                })
+            else:
+                # New family, insert it
+                print(f"Creating new family: {family_name}")
                 cur.execute("""
-                    INSERT INTO group_bill_automation.bill_automator_families 
-                    (user_id, family, created_at, updated_at)
+                    INSERT INTO group_bill_automation.bill_automator_families (user_id, family, created_at, updated_at)
                     VALUES (%s, %s, NOW(), NOW())
-                    RETURNING id
+                    RETURNING id, family
                 """, (request.user_id, family_name))
-                family_ids.append(cur.fetchone()[0])
-                new_families.append(family_name)
-        
+
+                family_data = cur.fetchone()
+                families_data.append({
+                    "id": family_data[0],
+                    "family": family_data[1]
+                })
+
+        # Remove families that are no longer in the list
+        new_family_names = set(data['families'])
+        for existing_family_name, existing_family_id in existing_families.items():
+            if existing_family_name not in new_family_names:
+                # Delete the family (this will cascade delete mappings due to foreign key)
+                print(f"Removing family: {existing_family_name} (ID: {existing_family_id})")
+                cur.execute("""
+                    DELETE FROM group_bill_automation.bill_automator_families
+                    WHERE id = %s
+                """, (existing_family_id,))
+
         conn.commit()
         cur.close()
         conn.close()
-        
+
         return jsonify({
-            "message": f"Families created successfully",
-            "families": new_families,
-            "family_ids": family_ids
-        }), 201
-        
+            "message": "Families saved successfully",
+            "families": families_data
+        }), 200
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1402,10 +1432,15 @@ def update_families():
 @require_auth
 def add_family():
     """Add a single family for the authenticated user."""
+    
     try:
         data = request.get_json()
-        if not data or 'family' not in data:
-            return jsonify({"error": "Missing required field: family"}), 400
+        if not data or 'family' not in data or not isinstance(data['family'], str):
+            return jsonify({"error": "Missing required field: family (must be a string)"}), 400
+        
+        family_name = data['family'].strip()
+        if not family_name:
+            return jsonify({"error": "Family name cannot be empty"}), 400
         
         conn = get_db_connection()
         if not conn:
@@ -1413,16 +1448,27 @@ def add_family():
         
         cur = conn.cursor()
         
+        # Check if family already exists for this user
+        cur.execute("""
+            SELECT id FROM group_bill_automation.bill_automator_families 
+            WHERE user_id = %s AND family = %s
+        """, (request.user_id, family_name))
+        
+        if cur.fetchone():
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Family with this name already exists"}), 409
+        
         # Insert new family
         cur.execute("""
-            INSERT INTO group_bill_automation.bill_automator_families 
-            (user_id, family, created_at, updated_at)
+            INSERT INTO group_bill_automation.bill_automator_families (user_id, family, created_at, updated_at)
             VALUES (%s, %s, NOW(), NOW())
             RETURNING id, family
-        """, (request.user_id, data['family']))
+        """, (request.user_id, family_name))
         
         family_data = cur.fetchone()
         conn.commit()
+        
         cur.close()
         conn.close()
         
@@ -1432,15 +1478,16 @@ def add_family():
                 "id": family_data[0],
                 "family": family_data[1]
             }
-        }), 201
-        
+        }), 200
+    
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/emails', methods=['POST'])
 @require_auth
 def create_emails():
-    """Create emails for the authenticated user."""
+    """Create or update emails for the authenticated user."""
+    
     try:
         data = request.get_json()
         if not data or 'emails' not in data or not isinstance(data['emails'], list):
@@ -1452,29 +1499,41 @@ def create_emails():
         
         cur = conn.cursor()
         
-        # Delete existing emails for this user
+        # Check if user already has an emails record
         cur.execute("""
-            DELETE FROM group_bill_automation.bill_automator_emails 
+            SELECT id FROM group_bill_automation.bill_automator_emails 
             WHERE user_id = %s
         """, (request.user_id,))
         
-        # Insert new emails
-        for email in data['emails']:
-            cur.execute("""
-                INSERT INTO group_bill_automation.bill_automator_emails 
-                (user_id, emails, created_at, updated_at)
-                VALUES (%s, %s, NOW(), NOW())
-            """, (request.user_id, [email]))
+        existing_record = cur.fetchone()
         
+        if existing_record:
+            # Update existing record
+            cur.execute("""
+                UPDATE group_bill_automation.bill_automator_emails 
+                SET emails = %s, updated_at = NOW()
+                WHERE user_id = %s
+                RETURNING id, emails
+            """, (data['emails'], request.user_id))
+        else:
+            # Create new record
+            cur.execute("""
+                INSERT INTO group_bill_automation.bill_automator_emails (user_id, emails, created_at, updated_at)
+                VALUES (%s, %s, NOW(), NOW())
+                RETURNING id, emails
+            """, (request.user_id, data['emails']))
+        
+        email_data = cur.fetchone()
         conn.commit()
+        
         cur.close()
         conn.close()
         
         return jsonify({
-            "message": f"Emails created successfully",
-            "emails": data['emails']
-        }), 201
-        
+            "message": "Emails saved successfully",
+            "emails": email_data[1]
+        }), 200
+    
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1536,10 +1595,20 @@ def update_emails():
 @require_auth
 def add_email():
     """Add a single email for the authenticated user."""
+    
     try:
         data = request.get_json()
-        if not data or 'email' not in data:
-            return jsonify({"error": "Missing required field: email"}), 400
+        if not data or 'email' not in data or not isinstance(data['email'], str):
+            return jsonify({"error": "Missing required field: email (must be a string)"}), 400
+        
+        email_address = data['email'].strip()
+        if not email_address:
+            return jsonify({"error": "Email cannot be empty"}), 400
+        
+        # Basic email validation
+        import re
+        if not re.match(r'^[^\s@]+@[^\s@]+\.[^\s@]+$', email_address):
+            return jsonify({"error": "Invalid email format"}), 400
         
         conn = get_db_connection()
         if not conn:
@@ -1547,25 +1616,50 @@ def add_email():
         
         cur = conn.cursor()
         
-        # Insert new email
+        # Check if user already has an emails record
         cur.execute("""
-            INSERT INTO group_bill_automation.bill_automator_emails 
-            (user_id, emails, created_at, updated_at)
-            VALUES (%s, %s, NOW(), NOW())
-            RETURNING id
-        """, (request.user_id, [data['email']]))
+            SELECT id, emails 
+            FROM group_bill_automation.bill_automator_emails 
+            WHERE user_id = %s
+        """, (request.user_id,))
         
-        email_id = cur.fetchone()[0]
+        existing_record = cur.fetchone()
+        
+        if existing_record:
+            # Check if email already exists in the array
+            existing_emails = existing_record[1] or []
+            if email_address in existing_emails:
+                cur.close()
+                conn.close()
+                return jsonify({"error": "Email already exists"}), 409
+            
+            # Add email to existing array
+            updated_emails = existing_emails + [email_address]
+            cur.execute("""
+                UPDATE group_bill_automation.bill_automator_emails 
+                SET emails = %s, updated_at = NOW()
+                WHERE user_id = %s
+                RETURNING id, emails
+            """, (updated_emails, request.user_id))
+        else:
+            # Create new record with single email
+            cur.execute("""
+                INSERT INTO group_bill_automation.bill_automator_emails (user_id, emails, created_at, updated_at)
+                VALUES (%s, %s, NOW(), NOW())
+                RETURNING id, emails
+            """, (request.user_id, [email_address]))
+        
+        email_data = cur.fetchone()
         conn.commit()
+        
         cur.close()
         conn.close()
         
         return jsonify({
             "message": "Email added successfully",
-            "email_id": email_id,
-            "email": data['email']
-        }), 201
-        
+            "emails": email_data[1]
+        }), 200
+    
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
