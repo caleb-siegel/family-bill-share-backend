@@ -137,7 +137,7 @@ def send_email(person_totals, custom_email_list=None, sender_email=None):
     Here's the breakdown: <br/>
     {breakdown_message}<br/>
         
-    Please Zelle Papa.<br/><br/>
+    Please pay up.<br/><br/>
 
     Pleasure doing business with ya.
     """
@@ -166,7 +166,7 @@ def send_email(person_totals, custom_email_list=None, sender_email=None):
 
     send_smtp_email = SendSmtpEmail(
         to=to_list,
-        sender={"name": "Verizon Monthly Phone Cost", "email": sender_email_to_use},
+        sender={"name": "Verizon Monthly Phone Cost", "email": "caleb.siegel@gmail.com"},
         subject=f"Monthly Verizon Bill",
         html_content=html_content
     )

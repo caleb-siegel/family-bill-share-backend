@@ -9,11 +9,56 @@ from flask_session import Session
 import os
 import psycopg2
 import bcrypt
+import jwt
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from services.pdf_service import PDFService
 from parse_verizon import extract_charges_from_pdf
+from functools import wraps
 
 load_dotenv()
+
+# JWT helper functions
+def create_jwt_token(user_id, email):
+    """Create a JWT token for the user."""
+    payload = {
+        'user_id': user_id,
+        'email': email,
+        'exp': datetime.utcnow() + timedelta(days=7),  # Token expires in 7 days
+        'iat': datetime.utcnow()
+    }
+    return jwt.encode(payload, os.getenv('SECRET_KEY', 'your-secret-key-change-in-production'), algorithm='HS256')
+
+def decode_jwt_token(token):
+    """Decode and validate a JWT token."""
+    try:
+        payload = jwt.decode(token, os.getenv('SECRET_KEY', 'your-secret-key-change-in-production'), algorithms=['HS256'])
+        return payload
+    except jwt.ExpiredSignatureError:
+        return None
+    except jwt.InvalidTokenError:
+        return None
+
+def require_auth(f):
+    """Decorator to require JWT authentication."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        auth_header = request.headers.get('Authorization')
+        if not auth_header or not auth_header.startswith('Bearer '):
+            return jsonify({"error": "Missing or invalid authorization header"}), 401
+        
+        token = auth_header.split(' ')[1]
+        payload = decode_jwt_token(token)
+        
+        if not payload:
+            return jsonify({"error": "Invalid or expired token"}), 401
+        
+        # Add user info to request
+        request.user_id = payload['user_id']
+        request.user_email = payload['email']
+        
+        return f(*args, **kwargs)
+    return decorated_function
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key-change-in-production')
@@ -213,12 +258,12 @@ def signup():
         cur.close()
         conn.close()
         
-        # Set session
-        session['user_id'] = user_data[0]
-        session['user_email'] = user_data[2]
+        # Create JWT token
+        token = create_jwt_token(user_data[0], user_data[2])
         
         return jsonify({
-            "message": "User created successfully", 
+            "message": "User created successfully",
+            "token": token,
             "user": {
                 "id": user_data[0],
                 "name": user_data[1],
@@ -262,12 +307,12 @@ def signin():
         if not check_password(data['password'], user_data[3]):
             return jsonify({"error": "Invalid email or password"}), 401
         
-        # Set session
-        session['user_id'] = user_data[0]
-        session['user_email'] = user_data[2]
+        # Create JWT token
+        token = create_jwt_token(user_data[0], user_data[2])
         
         return jsonify({
             "message": "Sign in successful",
+            "token": token,
             "user": {
                 "id": user_data[0],
                 "name": user_data[1],
@@ -281,29 +326,27 @@ def signin():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/auth/profile', methods=['GET'])
+@require_auth
 def get_profile():
     """Get the current user's complete profile."""
-    if 'user_id' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
-    
-    profile = get_user_profile(session['user_id'])
+    profile = get_user_profile(request.user_id)
     if not profile:
         return jsonify({"error": "User not found"}), 404
     
     return jsonify(profile)
 
 @app.route('/api/auth/signout', methods=['POST'])
+@require_auth
 def signout():
     """Sign out the current user."""
-    session.clear()
+    # With JWT, we don't need to clear anything server-side
+    # The client should discard the token
     return jsonify({"message": "Signed out successfully"})
 
 @app.route('/api/auth/check', methods=['GET'])
+@require_auth
 def check_auth():
     """Check if user is authenticated and return basic user info."""
-    if 'user_id' not in session:
-        return jsonify({"authenticated": False}), 401
-    
     try:
         conn = get_db_connection()
         if not conn:
@@ -314,18 +357,17 @@ def check_auth():
             SELECT id, name, email 
             FROM group_bill_automation.bill_automator_users 
             WHERE id = %s
-        """, (session['user_id'],))
+        """, (request.user_id,))
         
         user_data = cur.fetchone()
         
         if not user_data:
             cur.close()
             conn.close()
-            session.clear()
             return jsonify({"authenticated": False}), 401
         
         # Get full user profile data
-        profile = get_user_profile(session['user_id'])
+        profile = get_user_profile(request.user_id)
         
         cur.close()
         conn.close()
@@ -419,13 +461,10 @@ def create_user():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/families', methods=['GET'])
+@require_auth
 def get_families():
-    """Get all families for a user."""
+    """Get all families for the authenticated user."""
     try:
-        user_id = request.args.get('user_id')
-        if not user_id:
-            return jsonify({"error": "user_id parameter required"}), 400
-        
         conn = get_db_connection()
         if not conn:
             return jsonify({"error": "Database connection failed"}), 500
@@ -434,7 +473,7 @@ def get_families():
         cur.execute("""
             SELECT id, family FROM group_bill_automation.bill_automator_families 
             WHERE user_id = %s ORDER BY id
-        """, (user_id,))
+        """, (request.user_id,))
         families = cur.fetchall()
         
         family_list = []
@@ -453,10 +492,9 @@ def get_families():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/families', methods=['POST'])
+@require_auth
 def create_families():
     """Create or update families for the authenticated user while preserving mappings."""
-    if 'user_id' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
 
     try:
         data = request.get_json()
@@ -474,7 +512,7 @@ def create_families():
             SELECT id, family
             FROM group_bill_automation.bill_automator_families
             WHERE user_id = %s
-        """, (session['user_id'],))
+        """, (request.user_id,))
 
         existing_families = {}
         for row in cur.fetchall():
@@ -502,7 +540,7 @@ def create_families():
                     INSERT INTO group_bill_automation.bill_automator_families (user_id, family)
                     VALUES (%s, %s)
                     RETURNING id, family
-                """, (session['user_id'], family_name))
+                """, (request.user_id, family_name))
 
                 family_data = cur.fetchone()
                 families_data.append({
@@ -533,10 +571,9 @@ def create_families():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/families', methods=['PUT'])
+@require_auth
 def update_families():
     """Update families for the authenticated user while preserving mappings."""
-    if 'user_id' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
 
     try:
         data = request.get_json()
@@ -554,7 +591,7 @@ def update_families():
             SELECT id, family
             FROM group_bill_automation.bill_automator_families
             WHERE user_id = %s
-        """, (session['user_id'],))
+        """, (request.user_id,))
 
         existing_families = {}
         for row in cur.fetchall():
@@ -582,7 +619,7 @@ def update_families():
                     INSERT INTO group_bill_automation.bill_automator_families (user_id, family)
                     VALUES (%s, %s)
                     RETURNING id, family
-                """, (session['user_id'], family_name))
+                """, (request.user_id, family_name))
 
                 family_data = cur.fetchone()
                 families_data.append({
@@ -613,6 +650,7 @@ def update_families():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/emails', methods=['GET'])
+@require_auth
 def get_emails():
     """Get all emails for a user."""
     try:
@@ -642,10 +680,9 @@ def get_emails():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/emails', methods=['POST'])
+@require_auth
 def create_emails():
     """Create or update emails for the authenticated user."""
-    if 'user_id' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
     
     try:
         data = request.get_json()
@@ -662,7 +699,7 @@ def create_emails():
         cur.execute("""
             SELECT id FROM group_bill_automation.bill_automator_emails 
             WHERE user_id = %s
-        """, (session['user_id'],))
+        """, (request.user_id,))
         
         existing_record = cur.fetchone()
         
@@ -673,14 +710,14 @@ def create_emails():
                 SET emails = %s 
                 WHERE user_id = %s
                 RETURNING id, emails
-            """, (data['emails'], session['user_id']))
+            """, (data['emails'], request.user_id))
         else:
             # Create new record
             cur.execute("""
                 INSERT INTO group_bill_automation.bill_automator_emails (user_id, emails)
                 VALUES (%s, %s)
                 RETURNING id, emails
-            """, (session['user_id'], data['emails']))
+            """, (request.user_id, data['emails']))
         
         email_data = cur.fetchone()
         conn.commit()
@@ -697,10 +734,9 @@ def create_emails():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/emails', methods=['PUT'])
+@require_auth
 def update_emails():
     """Update emails for the authenticated user."""
-    if 'user_id' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
     
     try:
         data = request.get_json()
@@ -717,7 +753,7 @@ def update_emails():
         cur.execute("""
             SELECT id FROM group_bill_automation.bill_automator_emails 
             WHERE user_id = %s
-        """, (session['user_id'],))
+        """, (request.user_id,))
         
         existing_record = cur.fetchone()
         
@@ -728,14 +764,14 @@ def update_emails():
                 SET emails = %s 
                 WHERE user_id = %s
                 RETURNING id, emails
-            """, (data['emails'], session['user_id']))
+            """, (data['emails'], request.user_id))
         else:
             # Create new record
             cur.execute("""
                 INSERT INTO group_bill_automation.bill_automator_emails (user_id, emails)
                 VALUES (%s, %s)
                 RETURNING id, emails
-            """, (session['user_id'], data['emails']))
+            """, (request.user_id, data['emails']))
         
         email_data = cur.fetchone()
         conn.commit()
@@ -752,14 +788,13 @@ def update_emails():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/onboarding/complete', methods=['POST'])
+@require_auth
 def complete_onboarding():
     """Mark user onboarding as complete and return updated profile."""
-    if 'user_id' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
     
     try:
         # Get updated profile
-        profile = get_user_profile(session['user_id'])
+        profile = get_user_profile(request.user_id)
         if not profile:
             return jsonify({"error": "User not found"}), 404
         
@@ -772,10 +807,9 @@ def complete_onboarding():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/process_bill', methods=['POST'])
+@require_auth
 def process_bill():
     """Process bill with conditional logic based on user configuration."""
-    if 'user_id' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
     
     try:
         # Get the PDF file from the request
@@ -799,7 +833,7 @@ def process_bill():
                 (SELECT COUNT(*) FROM group_bill_automation.bill_automator_families WHERE user_id = %s) as family_count,
                 (SELECT COUNT(*) FROM group_bill_automation.bill_automator_emails WHERE user_id = %s) as email_count,
                 (SELECT COUNT(*) FROM group_bill_automation.bill_automator_line_discount_transfer_adjustment WHERE user_id = %s) as adjustment_count
-        """, (session['user_id'], session['user_id'], session['user_id']))
+        """, (request.user_id, request.user_id, request.user_id))
         
         config_data = cur.fetchone()
         cur.close()
@@ -814,7 +848,7 @@ def process_bill():
         
         if has_complete_config:
             # Quick process - use existing configuration
-            pdf_service = PDFService(session['user_id'])
+            pdf_service = PDFService(request.user_id)
             result = pdf_service.parse_verizon_bill(pdf_file)
             
             if result['success']:
@@ -845,10 +879,9 @@ def process_bill():
 
 
 @app.route('/api/families/add', methods=['POST'])
+@require_auth
 def add_family():
     """Add a single family for the authenticated user."""
-    if 'user_id' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
     
     try:
         data = request.get_json()
@@ -869,7 +902,7 @@ def add_family():
         cur.execute("""
             SELECT id FROM group_bill_automation.bill_automator_families 
             WHERE user_id = %s AND family = %s
-        """, (session['user_id'], family_name))
+        """, (request.user_id, family_name))
         
         if cur.fetchone():
             cur.close()
@@ -881,7 +914,7 @@ def add_family():
             INSERT INTO group_bill_automation.bill_automator_families (user_id, family)
             VALUES (%s, %s)
             RETURNING id, family
-        """, (session['user_id'], family_name))
+        """, (request.user_id, family_name))
         
         family_data = cur.fetchone()
         conn.commit()
@@ -901,10 +934,9 @@ def add_family():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/emails/add', methods=['POST'])
+@require_auth
 def add_email():
     """Add a single email for the authenticated user."""
-    if 'user_id' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
     
     try:
         data = request.get_json()
@@ -931,7 +963,7 @@ def add_email():
             SELECT id, emails 
             FROM group_bill_automation.bill_automator_emails 
             WHERE user_id = %s
-        """, (session['user_id'],))
+        """, (request.user_id,))
         
         existing_record = cur.fetchone()
         
@@ -950,14 +982,14 @@ def add_email():
                 SET emails = %s 
                 WHERE user_id = %s
                 RETURNING id, emails
-            """, (updated_emails, session['user_id']))
+            """, (updated_emails, request.user_id))
         else:
             # Create new record with single email
             cur.execute("""
                 INSERT INTO group_bill_automation.bill_automator_emails (user_id, emails)
                 VALUES (%s, %s)
                 RETURNING id, emails
-            """, (session['user_id'], [email_address]))
+            """, (request.user_id, [email_address]))
         
         email_data = cur.fetchone()
         conn.commit()
@@ -974,10 +1006,9 @@ def add_email():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/family-mappings', methods=['POST'])
+@require_auth
 def save_family_mappings():
     """Save phone line to family mappings for the authenticated user."""
-    if 'user_id' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
     
     try:
         data = request.get_json()
@@ -1014,7 +1045,7 @@ def save_family_mappings():
                 SELECT id FROM group_bill_automation.bill_automator_families 
                 WHERE user_id = %s
             )
-        """, (session['user_id'],))
+        """, (request.user_id,))
         
         existing_mappings = set()
         for row in cur.fetchall():
@@ -1051,10 +1082,9 @@ def save_family_mappings():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/lines', methods=['GET'])
+@require_auth
 def get_lines():
     """Get all available phone lines for the authenticated user."""
-    if 'user_id' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
     
     try:
         conn = get_db_connection()
@@ -1067,7 +1097,7 @@ def get_lines():
             FROM group_bill_automation.bill_automator_lines 
             WHERE user_id = %s
             ORDER BY id
-        """, (session['user_id'],))
+        """, (request.user_id,))
         
         lines = []
         for line in cur.fetchall():
@@ -1090,8 +1120,6 @@ def get_lines():
 # @app.route('/api/parse-pdf', methods=['POST'])
 # def parse_pdf():
 #     """Parse PDF and extract line data, checking against existing lines in database."""
-#     if 'user_id' not in session:
-#         return jsonify({"error": "Not authenticated"}), 401
     
 #     try:
 #         # Get the PDF file from the request
@@ -1103,7 +1131,7 @@ def get_lines():
 #             return jsonify({"error": "No PDF file selected"}), 400
         
 #         # Use the PDF service to parse the bill
-#         pdf_service = PDFService(session['user_id'])
+#         pdf_service = PDFService(request.user_id)
 #         result = pdf_service.parse_verizon_bill(pdf_file)
         
 #         if not result['success']:
@@ -1119,7 +1147,7 @@ def get_lines():
 #             SELECT id, name, number, device
 #             FROM group_bill_automation.bill_automator_lines 
 #             WHERE user_id = %s
-#         """, (session['user_id'],))
+#         """, (request.user_id,))
         
 #         existing_lines = {}
 #         for line in cur.fetchall():
@@ -1169,7 +1197,7 @@ def get_lines():
 #                     (user_id, name, number, device, created_at, updated_at)
 #                     VALUES (%s, %s, %s, %s, NOW(), NOW())
 #                     RETURNING id
-#                 """, (session['user_id'], name, phone_number, device))
+#                 """, (request.user_id, name, phone_number, device))
                 
 #                 line_data["id"] = cur.fetchone()[0]
 #                 new_lines.append(line_data)
@@ -1192,10 +1220,9 @@ def get_lines():
 #         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/parse-pdf', methods=['POST'])
+@require_auth
 def parse_pdf():
     """Parse PDF and extract line data without saving to database."""
-    if 'user_id' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
     
     try:
         # Get the PDF file from the request
@@ -1222,7 +1249,7 @@ def parse_pdf():
             SELECT id, name, number, device
             FROM group_bill_automation.bill_automator_lines 
             WHERE user_id = %s
-        """, (session['user_id'],))
+        """, (request.user_id,))
         
         existing_lines = {}
         for line in cur.fetchall():
@@ -1255,7 +1282,7 @@ def parse_pdf():
             JOIN group_bill_automation.bill_automator_lines l ON fm.line_id = l.id
             WHERE f.user_id = %s AND fm.line_id IN (55, 60)
             ORDER BY fm.line_id
-        """, (session['user_id'],))
+        """, (request.user_id,))
         
         specific_mappings = cur.fetchall()
         print(f"Specific mappings for line_id 55 and 60:")
@@ -1336,10 +1363,9 @@ def parse_pdf():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/save-selected-lines', methods=['POST'])
+@require_auth
 def save_selected_lines():
     """Save only the selected lines to the database."""
-    if 'user_id' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
     
     try:
         data = request.get_json()
@@ -1361,7 +1387,7 @@ def save_selected_lines():
                     (user_id, name, number, device, created_at, updated_at)
                     VALUES (%s, %s, %s, %s, NOW(), NOW())
                     RETURNING id
-                """, (session['user_id'], line['name'], line['number'], line['device']))
+                """, (request.user_id, line['name'], line['number'], line['device']))
                 
                 line_id = cur.fetchone()[0]
                 
@@ -1399,10 +1425,9 @@ def save_selected_lines():
 
 
 @app.route('/api/family-mappings', methods=['GET'])
+@require_auth
 def get_family_mappings():
     """Get existing family mappings for the authenticated user."""
-    if 'user_id' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
     
     try:
         conn = get_db_connection()
@@ -1417,7 +1442,7 @@ def get_family_mappings():
             JOIN group_bill_automation.bill_automator_lines l ON fm.line_id = l.id
             WHERE f.user_id = %s
             ORDER BY fm.id
-        """, (session['user_id'],))
+        """, (request.user_id,))
         
         mappings = []
         for mapping in cur.fetchall():
@@ -1442,10 +1467,9 @@ def get_family_mappings():
 
 
 @app.route('/api/accountwide-reconciliation', methods=['GET'])
+@require_auth
 def get_accountwide_reconciliation():
     """Get account-wide reconciliation for the authenticated user."""
-    if 'user_id' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
     
     try:
         conn = get_db_connection()
@@ -1457,7 +1481,7 @@ def get_accountwide_reconciliation():
             SELECT reconciliation 
             FROM group_bill_automation.bill_automator_accountwide_reconciliation 
             WHERE user_id = %s
-        """, (session['user_id'],))
+        """, (request.user_id,))
         
         result = cur.fetchone()
         cur.close()
@@ -1479,10 +1503,9 @@ def get_accountwide_reconciliation():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/accountwide-reconciliation', methods=['POST'])
+@require_auth
 def save_accountwide_reconciliation():
     """Save account-wide reconciliation settings for the authenticated user."""
-    if 'user_id' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
     
     try:
         data = request.get_json()
@@ -1501,7 +1524,7 @@ def save_accountwide_reconciliation():
         cur.execute("""
             DELETE FROM group_bill_automation.bill_automator_accountwide_reconciliation 
             WHERE user_id = %s
-        """, (session['user_id'],))
+        """, (request.user_id,))
         
         # Insert new reconciliation
         cur.execute("""
@@ -1509,7 +1532,7 @@ def save_accountwide_reconciliation():
             (user_id, reconciliation) 
             VALUES (%s, %s)
             RETURNING id
-        """, (session['user_id'], reconciliation))
+        """, (request.user_id, reconciliation))
         
         reconciliation_id = cur.fetchone()[0]
         conn.commit()
@@ -1528,10 +1551,9 @@ def save_accountwide_reconciliation():
 
 
 @app.route('/api/line-discount-transfer', methods=['GET'])
+@require_auth
 def get_line_discount_transfer():
     """Get line discount transfer for the authenticated user."""
-    if 'user_id' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
     
     try:
         conn = get_db_connection()
@@ -1545,7 +1567,7 @@ def get_line_discount_transfer():
             WHERE user_id = %s
             ORDER BY created_at DESC
             LIMIT 1
-        """, (session['user_id'],))
+        """, (request.user_id,))
         
         result = cur.fetchone()
         cur.close()
@@ -1571,10 +1593,9 @@ def get_line_discount_transfer():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/line-discount-transfer', methods=['POST'])
+@require_auth
 def save_line_discount_transfer():
     """Save line discount transfer adjustment for the authenticated user."""
-    if 'user_id' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
     
     try:
         data = request.get_json()
@@ -1601,7 +1622,7 @@ def save_line_discount_transfer():
         cur.execute("""
             SELECT id FROM group_bill_automation.bill_automator_lines 
             WHERE id IN (%s, %s) AND user_id = %s
-        """, (line_to_remove_from, line_to_add_to, session['user_id']))
+        """, (line_to_remove_from, line_to_add_to, request.user_id))
         
         lines = cur.fetchall()
         if len(lines) != 2:
@@ -1611,7 +1632,7 @@ def save_line_discount_transfer():
         cur.execute("""
             SELECT id FROM group_bill_automation.bill_automator_line_discount_transfer_adjustment 
             WHERE user_id = %s AND line_to_remove_from = %s AND line_to_add_to = %s
-        """, (session['user_id'], line_to_remove_from, line_to_add_to))
+        """, (request.user_id, line_to_remove_from, line_to_add_to))
         
         existing_transfer = cur.fetchone()
         
@@ -1632,7 +1653,7 @@ def save_line_discount_transfer():
                 (user_id, transfer_amount, line_to_remove_from, line_to_add_to) 
                 VALUES (%s, %s, %s, %s)
                 RETURNING id
-            """, (session['user_id'], transfer_amount, line_to_remove_from, line_to_add_to))
+            """, (request.user_id, transfer_amount, line_to_remove_from, line_to_add_to))
             
             transfer_id = cur.fetchone()[0]
             message = "Line discount transfer saved successfully"
@@ -1653,10 +1674,9 @@ def save_line_discount_transfer():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/send-bill-emails', methods=['POST'])
+@require_auth
 def send_bill_emails():
     """Send bill emails with family totals to configured email addresses."""
-    if 'user_id' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
     
     try:
         data = request.get_json()
@@ -1678,7 +1698,7 @@ def send_bill_emails():
         cur.execute("""
             SELECT email FROM group_bill_automation.bill_automator_users 
             WHERE id = %s
-        """, (session['user_id'],))
+        """, (request.user_id,))
         
         user_email_record = cur.fetchone()
         if not user_email_record:
@@ -1692,7 +1712,7 @@ def send_bill_emails():
         cur.execute("""
             SELECT emails FROM group_bill_automation.bill_automator_emails 
             WHERE user_id = %s
-        """, (session['user_id'],))
+        """, (request.user_id,))
         
         email_record = cur.fetchone()
         cur.close()
@@ -1731,10 +1751,9 @@ def send_bill_emails():
 
 
 @app.route('/api/automated_process', methods=['POST'])
+@require_auth
 def automated_process():
     """Fully automated bill processing using saved configuration."""
-    if 'user_id' not in session:
-        return jsonify({"error": "Not authenticated"}), 401
     
     try:
         # Get the PDF file from the request
@@ -1760,7 +1779,7 @@ def automated_process():
             LEFT JOIN group_bill_automation.bill_automator_lines l ON fm.line_id = l.id
             WHERE f.user_id = %s
             ORDER BY f.id, fm.id
-        """, (session['user_id'],))
+        """, (request.user_id,))
         
         family_mappings = cur.fetchall()
         
@@ -1778,7 +1797,7 @@ def automated_process():
             JOIN group_bill_automation.bill_automator_lines l ON fm.line_id = l.id
             WHERE f.user_id = %s AND fm.line_id IN (55, 60)
             ORDER BY fm.line_id
-        """, (session['user_id'],))
+        """, (request.user_id,))
         
         specific_mappings = cur.fetchall()
         print(f"Specific mappings for line_id 55 and 60:")
@@ -1789,7 +1808,7 @@ def automated_process():
         cur.execute("""
             SELECT emails FROM group_bill_automation.bill_automator_emails 
             WHERE user_id = %s
-        """, (session['user_id'],))
+        """, (request.user_id,))
         
         email_record = cur.fetchone()
         if not email_record or not email_record[0]:
@@ -1804,7 +1823,7 @@ def automated_process():
         cur.execute("""
             SELECT email FROM group_bill_automation.bill_automator_users 
             WHERE id = %s
-        """, (session['user_id'],))
+        """, (request.user_id,))
         
         user_email_record = cur.fetchone()
         if not user_email_record:
@@ -1819,7 +1838,7 @@ def automated_process():
             SELECT transfer_amount, line_to_remove_from, line_to_add_to
             FROM group_bill_automation.bill_automator_line_discount_transfer_adjustment 
             WHERE user_id = %s
-        """, (session['user_id'],))
+        """, (request.user_id,))
         
         line_adjustments = cur.fetchall()
         
@@ -1828,7 +1847,7 @@ def automated_process():
             SELECT reconciliation
             FROM group_bill_automation.bill_automator_accountwide_reconciliation 
             WHERE user_id = %s
-        """, (session['user_id'],))
+        """, (request.user_id,))
         
         reconciliation_record = cur.fetchone()
         account_wide_reconciliation = reconciliation_record[0] if reconciliation_record else None
@@ -1987,15 +2006,6 @@ def automated_process():
     
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-@app.route('/api/health', methods=['GET'])
-def health_check():
-    """Simple health check endpoint."""
-    return jsonify({
-        "status": "healthy",
-        "message": "Backend is running",
-        "environment": os.getenv('FLASK_ENV', 'development')
-    })
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5001)
