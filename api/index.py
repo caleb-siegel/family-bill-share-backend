@@ -71,7 +71,20 @@ CORS(app,
      origins=["https://family-bill-share.vercel.app", "http://localhost:5173", "http://localhost:3000"],
      supports_credentials=True,
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-     allow_headers=["Content-Type", "Authorization", "X-Requested-With"])
+     allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
+     expose_headers=["Content-Type", "Authorization"])
+
+# Add CORS headers to all responses
+@app.after_request
+def after_request(response):
+    """Add CORS headers to all responses."""
+    origin = request.headers.get('Origin')
+    if origin in ["https://family-bill-share.vercel.app", "http://localhost:5173", "http://localhost:3000"]:
+        response.headers.add('Access-Control-Allow-Origin', origin)
+    response.headers.add('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With')
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
+    return response
 
 # Database connection function
 def get_db_connection():
