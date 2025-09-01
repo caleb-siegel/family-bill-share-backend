@@ -286,7 +286,7 @@ def check_auth():
         """, (request.user_id,))
         
         email_data = cur.fetchone()
-        emails = email_data[1] if email_data else []
+        emails = email_data[0] if email_data else []
         
         # Get user's line adjustments
         cur.execute("""
@@ -314,7 +314,7 @@ def check_auth():
         """, (request.user_id,))
         
         reconciliation_data = cur.fetchone()
-        reconciliation = reconciliation_data[1] if reconciliation_data else None
+        reconciliation = reconciliation_data[0] if reconciliation_data else None
         
         cur.close()
         conn.close()
@@ -414,7 +414,7 @@ def get_profile():
         """, (request.user_id,))
         
         email_data = cur.fetchone()
-        emails = email_data[1] if email_data else []
+        emails = email_data[0] if email_data else []
         
         # Get user's line adjustments
         cur.execute("""
@@ -442,7 +442,7 @@ def get_profile():
         """, (request.user_id,))
         
         reconciliation_data = cur.fetchone()
-        reconciliation = reconciliation_data[1] if reconciliation_data else None
+        reconciliation = reconciliation_data[0] if reconciliation_data else None
         
         cur.close()
         conn.close()
