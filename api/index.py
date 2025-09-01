@@ -66,7 +66,12 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key-change-in-pr
 app.config['SESSION_TYPE'] = 'null'
 Session(app)
 
-CORS(app, supports_credentials=True)
+# Configure CORS to allow requests from your frontend domain
+CORS(app, 
+     origins=["https://family-bill-share.vercel.app", "http://localhost:5173", "http://localhost:3000"],
+     supports_credentials=True,
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+     allow_headers=["Content-Type", "Authorization", "X-Requested-With"])
 
 # Database connection function
 def get_db_connection():
@@ -202,6 +207,17 @@ def get_user_profile(user_id):
     except Exception as e:
         print(f"Error getting user profile: {e}")
         return None
+
+# Add a preflight handler for OPTIONS requests
+@app.route('/api/<path:path>', methods=['OPTIONS'])
+def handle_preflight(path):
+    """Handle preflight OPTIONS requests for CORS."""
+    response = jsonify({"message": "Preflight request handled"})
+    response.headers.add('Access-Control-Allow-Origin', 'https://family-bill-share.vercel.app')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS')
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
+    return response
 
 # API Routes
 @app.route('/api/health', methods=['GET'])
