@@ -839,12 +839,29 @@ def get_family_mappings():
 
 @app.route('/api/family-mappings', methods=['POST'])
 @require_auth
-def create_family_mapping():
-    """Create a new family mapping."""
+def save_family_mappings():
+    """Save phone line to family mappings for the authenticated user."""
+    
     try:
         data = request.get_json()
-        if not data or 'family_id' not in data or 'line_id' not in data:
-            return jsonify({"error": "Missing required fields: family_id, line_id"}), 400
+        print(f"Received mappings data: {data}")
+        
+        if not data or 'mappings' not in data or not isinstance(data['mappings'], list):
+            return jsonify({"error": "Missing required field: mappings (must be an array)"}), 400
+        
+        # Validate that each mapping has required fields
+        for i, mapping in enumerate(data['mappings']):
+            print(f"Validating mapping {i}: {mapping}")
+            if not isinstance(mapping, dict):
+                return jsonify({"error": f"Mapping {i} is not a dictionary: {mapping}"}), 400
+            if 'family_id' not in mapping:
+                return jsonify({"error": f"Mapping {i} missing family_id field: {mapping}"}), 400
+            if 'line_id' not in mapping:
+                return jsonify({"error": f"Mapping {i} missing line_id field: {mapping}"}), 400
+            if not mapping['family_id']:
+                return jsonify({"error": f"Mapping {i} has empty family_id: {mapping}"}), 400
+            if not mapping['line_id']:
+                return jsonify({"error": f"Mapping {i} has empty line_id: {mapping}"}), 400
         
         conn = get_db_connection()
         if not conn:
@@ -852,62 +869,47 @@ def create_family_mapping():
         
         cur = conn.cursor()
         
-        # Check if family belongs to user
+        # Get existing mappings to avoid duplicates
         cur.execute("""
-            SELECT id FROM group_bill_automation.bill_automator_families 
-            WHERE id = %s AND user_id = %s
-        """, (data['family_id'], request.user_id))
+            SELECT family_id, line_id 
+            FROM group_bill_automation.bill_automator_family_mapping 
+            WHERE family_id IN (
+                SELECT id FROM group_bill_automation.bill_automator_families 
+                WHERE user_id = %s
+            )
+        """, (request.user_id,))
         
-        if not cur.fetchone():
-            cur.close()
-            conn.close()
-            return jsonify({"error": "Family not found"}), 404
+        existing_mappings = set()
+        for row in cur.fetchall():
+            existing_mappings.add((row[0], row[1]))
         
-        # Check if line belongs to user
-        cur.execute("""
-            SELECT id FROM group_bill_automation.bill_automator_lines 
-            WHERE id = %s AND user_id = %s
-        """, (data['line_id'], request.user_id))
+        # Insert new mappings, avoiding duplicates
+        inserted_count = 0
+        for mapping in data['mappings']:
+            family_id = mapping['family_id']
+            line_id = mapping['line_id']
+            
+            if (family_id, line_id) not in existing_mappings:
+                cur.execute("""
+                    INSERT INTO group_bill_automation.bill_automator_family_mapping 
+                    (family_id, line_id) 
+                    VALUES (%s, %s)
+                """, (family_id, line_id))
+                inserted_count += 1
+            else:
+                # Mapping already exists, skip
+                pass
         
-        if not cur.fetchone():
-            cur.close()
-            conn.close()
-            return jsonify({"error": "Line not found"}), 404
-        
-        # Check if mapping already exists
-        cur.execute("""
-            SELECT id FROM group_bill_automation.bill_automator_family_mapping 
-            WHERE family_id = %s AND line_id = %s
-        """, (data['family_id'], data['line_id']))
-        
-        if cur.fetchone():
-            cur.close()
-            conn.close()
-            return jsonify({"error": "Family mapping already exists"}), 409
-        
-        # Create the mapping
-        cur.execute("""
-            INSERT INTO group_bill_automation.bill_automator_family_mapping 
-            (family_id, line_id)
-            VALUES (%s, %s)
-            RETURNING id, family_id, line_id
-        """, (data['family_id'], data['line_id']))
-        
-        mapping_data = cur.fetchone()
         conn.commit()
-        
         cur.close()
         conn.close()
         
         return jsonify({
-            "message": "Family mapping created successfully",
-            "family_mapping": {
-                "id": mapping_data[0],
-                "family_id": mapping_data[1],
-                "line_id": mapping_data[2]
-            }
-        }), 201
-        
+            "message": f"Family mappings saved successfully ({inserted_count} new mappings added)",
+            "mappings_count": len(data['mappings']),
+            "inserted_count": inserted_count
+        }), 200
+    
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
