@@ -322,6 +322,11 @@ def check_auth():
         # User is configured if they have at least one family and one email
         is_configured = len(families) > 0 and len(emails) > 0
         
+        # Ensure all arrays are always arrays (defensive programming)
+        families = families if families else []
+        emails = emails if emails else []
+        line_adjustments = line_adjustments if line_adjustments else []
+        
         # Create the full profile that the frontend expects
         profile = {
             "user": {
@@ -449,6 +454,11 @@ def get_profile():
         
         # User is configured if they have at least one family and one email
         is_configured = len(families) > 0 and len(emails) > 0
+        
+        # Ensure all arrays are always arrays (defensive programming)
+        families = families if families else []
+        emails = emails if emails else []
+        line_adjustments = line_adjustments if line_adjustments else []
         
         return jsonify({
             "user": {
