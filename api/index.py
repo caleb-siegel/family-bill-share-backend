@@ -1966,7 +1966,7 @@ def automated_process():
                 person_totals = family_totals  # The function can handle family names as person names
                 
                 # Send email using the existing functionality with detailed breakdown
-                parse_verizon.send_email(person_totals, emails, user_email, line_details, family_mappings)
+                parse_verizon.send_email(person_totals, emails, user_email, line_details, family_mappings, line_adjustments, account_wide_value)
                 
             except Exception as e:
                 return jsonify({"error": f"Failed to send emails: {str(e)}"}), 500

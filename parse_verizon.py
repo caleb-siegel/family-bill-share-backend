@@ -119,7 +119,7 @@ def adjust_for_smartwatch_discount(person_totals):
         person_totals["New Roc Siegels"] -= 7
         person_totals["Riverdale Siegels"] += 7
 
-def send_email(person_totals, custom_email_list=None, sender_email=None, line_details=None, family_mappings=None):
+def send_email(person_totals, custom_email_list=None, sender_email=None, line_details=None, family_mappings=None, line_adjustments=None, account_wide_value=None):
     breakdown_message = generate_messages(person_totals)
     total_cost = sum(person_totals.values())
     
@@ -161,12 +161,26 @@ def send_email(person_totals, custom_email_list=None, sender_email=None, line_de
                 detailed_breakdown += f"&nbsp;&nbsp;• {line['name']} ({line['device']}) {line['number']}: ${line['charge']:.2f}<br/>"
             
             # Add account-wide share if applicable
-            if family_name in person_totals:
-                family_total = person_totals[family_name]
-                lines_total = sum(line['charge'] for line in lines)
-                account_wide_share = family_total - lines_total
-                if abs(account_wide_share) > 0.01:  # Only show if significant
-                    detailed_breakdown += f"&nbsp;&nbsp;• Account-wide share: ${account_wide_share:.2f}<br/>"
+            if account_wide_value is not None and abs(account_wide_value) > 0.01:
+                # Calculate per-family share of account-wide charges/credits
+                num_families = len(family_line_details)
+                if num_families > 0:
+                    per_family_share = account_wide_value / num_families
+                    if abs(per_family_share) > 0.01:
+                        detailed_breakdown += f"&nbsp;&nbsp;• Account-wide share: ${per_family_share:.2f}<br/>"
+            
+            # Add line discount transfers if applicable
+            if line_adjustments:
+                for transfer_amount, line_to_remove_from, line_to_add_to in line_adjustments:
+                    transfer_amount_float = float(transfer_amount)
+                    
+                    # Check if this family has lines involved in the transfer
+                    for family_id, fam_name, line_id, line_name, line_number, line_device in family_mappings:
+                        if fam_name == family_name:
+                            if line_id == line_to_remove_from:
+                                detailed_breakdown += f"&nbsp;&nbsp;• Transfer out: -${transfer_amount_float:.2f}<br/>"
+                            elif line_id == line_to_add_to:
+                                detailed_breakdown += f"&nbsp;&nbsp;• Transfer in: +${transfer_amount_float:.2f}<br/>"
 
     html_content = f"""
     Hey family!<br/><br/>
