@@ -1035,5 +1035,40 @@ def save_line_discount_transfer():
         print(f"Error saving line discount transfer: {e}")
         return jsonify({"error": str(e)}), 500
 
+@app.route('/api/parse-pdf', methods=['POST'])
+@require_auth
+def parse_pdf():
+    """Parse a PDF bill and extract line details."""
+    try:
+        # Get the PDF file from the request
+        if 'pdf' not in request.files:
+            return jsonify({"error": "No PDF file provided"}), 400
+        
+        pdf_file = request.files['pdf']
+        if pdf_file.filename == '':
+            return jsonify({"error": "No PDF file selected"}), 400
+        
+        # Read the PDF file into bytes
+        pdf_bytes = pdf_file.read()
+        
+        try:
+            # Import parse_verizon functions
+            import parse_verizon
+            
+            # Extract charges using the same approach as parse_verizon.py
+            account_wide_value, line_details = parse_verizon.extract_charges_from_pdf(pdf_bytes)
+            
+            return jsonify({
+                "success": True,
+                "account_wide_value": account_wide_value,
+                "line_details": line_details
+            })
+            
+        except Exception as e:
+            return jsonify({"error": f"Failed to parse PDF: {str(e)}"}), 500
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5001)
