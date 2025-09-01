@@ -1459,5 +1459,268 @@ def save_selected_lines():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route('/api/send-bill-emails', methods=['POST'])
+@require_auth
+def send_bill_emails():
+    """Send bill emails with family totals to configured email addresses."""
+    
+    try:
+        data = request.get_json()
+        if not data or 'family_totals' not in data:
+            return jsonify({"error": "Missing required field: family_totals"}), 400
+        
+        family_totals = data['family_totals']
+        if not isinstance(family_totals, list):
+            return jsonify({"error": "family_totals must be a list"}), 400
+        
+        # Get user's email addresses
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database connection failed"}), 500
+        
+        cur = conn.cursor()
+        
+        # Get user's email
+        cur.execute("""
+            SELECT email FROM group_bill_automation.bill_automator_users 
+            WHERE id = %s
+        """, (request.user_id,))
+        
+        user_email_record = cur.fetchone()
+        if not user_email_record:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "User not found"}), 404
+        
+        user_email = user_email_record[0]
+        
+        # Get user's email addresses
+        cur.execute("""
+            SELECT emails FROM group_bill_automation.bill_automator_emails 
+            WHERE user_id = %s
+        """, (request.user_id,))
+        
+        email_record = cur.fetchone()
+        cur.close()
+        conn.close()
+        
+        if not email_record or not email_record[0]:
+            return jsonify({"error": "No email addresses configured for this user"}), 400
+        
+        email_list = email_record[0]
+        
+        # Convert family totals to the format expected by parse_verizon
+        # The parse_verizon functions expect person_totals as a dict
+        person_totals = {}
+        for family_total in family_totals:
+            if 'family' in family_total and 'total' in family_total:
+                family_name = family_total['family']
+                total_amount = float(family_total['total'])
+                person_totals[family_name] = total_amount
+        
+        # Import parse_verizon functions
+        import parse_verizon
+        
+        # Send the email using the existing functionality with user's email list
+        parse_verizon.send_email(person_totals, email_list, user_email)
+        
+        return jsonify({
+            "success": True,
+            "message": f"Bill emails sent successfully to {len(email_list)} recipients",
+            "emails_sent": len(email_list),
+            "family_totals": family_totals
+        })
+    
+    except Exception as e:
+        print(f"Error sending bill emails: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/automated_process', methods=['POST'])
+@require_auth
+def automated_process():
+    """Fully automated bill processing using saved configuration."""
+    
+    try:
+        # Get the PDF file from the request
+        if 'pdf' not in request.files:
+            return jsonify({"error": "No PDF file provided"}), 400
+        
+        pdf_file = request.files['pdf']
+        if pdf_file.filename == '':
+            return jsonify({"error": "No PDF file selected"}), 400
+        
+        # Get user's complete configuration from database
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database connection failed"}), 500
+        
+        cur = conn.cursor()
+        
+        # Get user's families and line mappings
+        cur.execute("""
+            SELECT f.id, f.family, fm.line_id, l.name as line_name, l.number as line_number, l.device as line_device
+            FROM group_bill_automation.bill_automator_families f
+            LEFT JOIN group_bill_automation.bill_automator_family_mapping fm ON f.id = fm.family_id
+            LEFT JOIN group_bill_automation.bill_automator_lines l ON fm.line_id = l.id
+            WHERE f.user_id = %s
+            ORDER BY f.id, fm.id
+        """, (request.user_id,))
+        
+        family_mappings = cur.fetchall()
+        
+        # Get user's emails
+        cur.execute("""
+            SELECT emails FROM group_bill_automation.bill_automator_emails 
+            WHERE user_id = %s
+        """, (request.user_id,))
+        
+        email_record = cur.fetchone()
+        if not email_record or not email_record[0]:
+            return jsonify({
+                "error": "No email addresses configured",
+                "message": "Please configure email addresses before using automated processing"
+            }), 400
+        
+        emails = email_record[0]  # This is already a list of email addresses
+        
+        # Get user's email for sender
+        cur.execute("""
+            SELECT email FROM group_bill_automation.bill_automator_users 
+            WHERE id = %s
+        """, (request.user_id,))
+        
+        user_email_record = cur.fetchone()
+        if not user_email_record:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "User not found"}), 404
+        
+        user_email = user_email_record[0]
+        
+        # Get user's line adjustments (discount transfers)
+        cur.execute("""
+            SELECT transfer_amount, line_to_remove_from, line_to_add_to
+            FROM group_bill_automation.bill_automator_line_discount_transfer_adjustment 
+            WHERE user_id = %s
+        """, (request.user_id,))
+        
+        line_adjustments = cur.fetchall()
+        
+        # Get user's account-wide reconciliation
+        cur.execute("""
+            SELECT reconciliation
+            FROM group_bill_automation.bill_automator_accountwide_reconciliation 
+            WHERE user_id = %s
+        """, (request.user_id,))
+        
+        reconciliation_record = cur.fetchone()
+        account_wide_reconciliation = reconciliation_record[0] if reconciliation_record else None
+        
+        cur.close()
+        conn.close()
+        
+        # Check if user has complete configuration
+        if not family_mappings:
+            return jsonify({
+                "error": "Incomplete configuration",
+                "message": "Please configure families and line mappings before using automated processing"
+            }), 400
+        
+        # Step 1: Parse the PDF using the same approach as parse_verizon.py
+        import tempfile
+        import os
+        
+        # Read the PDF file into bytes (same as parse-pdf endpoint)
+        pdf_bytes = pdf_file.read()
+        
+        try:
+            # Import parse_verizon functions
+            import parse_verizon
+            
+            # Extract charges using the same approach as parse_verizon.py
+            account_wide_value, line_details = parse_verizon.extract_charges_from_pdf(pdf_bytes)
+            
+            # Step 2: Calculate family totals based on line mappings
+            family_totals = {}
+            
+            # Group charges by family based on line mappings
+            for family_id, family_name, line_id, line_name, line_number, line_device in family_mappings:
+                if family_name not in family_totals:
+                    family_totals[family_name] = 0
+                
+                # Find charges for this line by matching name and number
+                for line_key, line_data in line_details.items():
+                    pdf_name = line_data.get('name')
+                    pdf_number = line_data.get('number')
+                    pdf_charge = line_data.get('charge', 0)
+                    
+                    if (pdf_name == line_name and pdf_number == line_number):
+                        family_totals[family_name] += pdf_charge
+            
+            # Step 3: Apply line adjustments (discount transfers)
+            for transfer_amount, line_to_remove_from, line_to_add_to in line_adjustments:
+                # Convert decimal to float for arithmetic operations
+                transfer_amount_float = float(transfer_amount)
+                
+                # Find which family the lines belong to
+                for family_id, family_name, line_id, line_name, line_number, line_device in family_mappings:
+                    if line_id == line_to_remove_from:
+                        family_totals[family_name] -= transfer_amount_float
+                    elif line_id == line_to_add_to:
+                        family_totals[family_name] += transfer_amount_float
+            
+            # Step 4: Apply account-wide reconciliation if configured
+            if account_wide_reconciliation:
+                if account_wide_reconciliation == "evenly":
+                    # Distribute account-wide charges/credits equally among families
+                    num_families = len(set(f[1] for f in family_mappings))  # unique family names
+                    if num_families > 0:
+                        per_family_share = account_wide_value / num_families
+                        for family_name in family_totals:
+                            family_totals[family_name] += per_family_share
+                else:
+                    # Try to parse as a numeric value
+                    try:
+                        account_wide_amount = float(account_wide_reconciliation)
+                        # Distribute account-wide amount equally among families
+                        num_families = len(set(f[1] for f in family_mappings))  # unique family names
+                        if num_families > 0:
+                            per_family_share = account_wide_amount / num_families
+                            for family_name in family_totals:
+                                family_totals[family_name] += per_family_share
+                    except ValueError:
+                        # If reconciliation is not a valid number, skip it
+                        pass
+            
+            # Step 5: Send emails using the existing functionality
+            try:
+                # Convert family totals to the format expected by parse_verizon.send_email
+                person_totals = family_totals  # The function can handle family names as person names
+                
+                # Send email using the existing functionality
+                parse_verizon.send_email(person_totals, emails, user_email)
+                
+            except Exception as e:
+                return jsonify({"error": f"Failed to send emails: {str(e)}"}), 500
+            
+            total_amount = sum(family_totals.values())
+            
+            return jsonify({
+                "success": True,
+                "message": "Bill processed and emails sent successfully",
+                "family_totals": family_totals,
+                "emails_sent": len(emails),
+                "total_amount": total_amount,
+                "account_wide_value": account_wide_value,
+                "line_adjustments_applied": len(line_adjustments),
+                "account_wide_reconciliation_applied": account_wide_reconciliation is not None
+            })
+            
+        except Exception as e:
+            raise e
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5001)
