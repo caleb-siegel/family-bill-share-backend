@@ -487,10 +487,10 @@ def get_lines():
         
         # Get user's lines
         cur.execute("""
-            SELECT id, line_name, line_number, created_at, updated_at
+            SELECT id, name, number, created_at, updated_at
             FROM group_bill_automation.bill_automator_lines 
             WHERE user_id = %s 
-            ORDER BY line_number
+            ORDER BY number
         """, (request.user_id,))
         
         lines = []
@@ -529,7 +529,7 @@ def create_line():
         # Check if line number already exists for this user
         cur.execute("""
             SELECT id FROM group_bill_automation.bill_automator_lines 
-            WHERE user_id = %s AND line_number = %s
+            WHERE user_id = %s AND number = %s
         """, (request.user_id, data['line_number']))
         
         if cur.fetchone():
@@ -540,9 +540,9 @@ def create_line():
         # Create the line
         cur.execute("""
             INSERT INTO group_bill_automation.bill_automator_lines 
-            (user_id, line_name, line_number, created_at, updated_at)
+            (user_id, name, number, created_at, updated_at)
             VALUES (%s, %s, %s, NOW(), NOW())
-            RETURNING id, line_name, line_number, created_at, updated_at
+            RETURNING id, name, number, created_at, updated_at
         """, (request.user_id, data['line_name'], data['line_number']))
         
         line_data = cur.fetchone()
@@ -594,7 +594,7 @@ def update_line(line_id):
         # Check if new line number conflicts with existing line
         cur.execute("""
             SELECT id FROM group_bill_automation.bill_automator_lines 
-            WHERE user_id = %s AND line_number = %s AND id != %s
+            WHERE user_id = %s AND number = %s AND id != %s
         """, (request.user_id, data['line_number'], line_id))
         
         if cur.fetchone():
@@ -605,9 +605,9 @@ def update_line(line_id):
         # Update the line
         cur.execute("""
             UPDATE group_bill_automation.bill_automator_lines 
-            SET line_name = %s, line_number = %s, updated_at = NOW()
+            SET name = %s, number = %s, updated_at = NOW()
             WHERE id = %s AND user_id = %s
-            RETURNING id, line_name, line_number, created_at, updated_at
+            RETURNING id, name, number, created_at, updated_at
         """, (data['line_name'], data['line_number'], line_id, request.user_id))
         
         line_data = cur.fetchone()
@@ -680,12 +680,12 @@ def get_family_mappings():
         
         # Get user's family mappings with family and line information
         cur.execute("""
-            SELECT fm.id, fm.family_id, fm.line_id, f.family, l.line_name, l.line_number
+            SELECT fm.id, fm.family_id, fm.line_id, f.family, l.name, l.number
             FROM group_bill_automation.bill_automator_family_mapping fm
             JOIN group_bill_automation.bill_automator_families f ON fm.family_id = f.id
             JOIN group_bill_automation.bill_automator_lines l ON fm.line_id = l.id
             WHERE f.user_id = %s
-            ORDER BY f.family, l.line_number
+            ORDER BY f.family, l.number
         """, (request.user_id,))
         
         mappings = []
