@@ -119,7 +119,7 @@ def adjust_for_smartwatch_discount(person_totals):
         person_totals["New Roc Siegels"] -= 7
         person_totals["Riverdale Siegels"] += 7
 
-def send_email(person_totals, custom_email_list=None, sender_email=None):
+def send_email(person_totals, custom_email_list=None, sender_email=None, line_details=None, family_mappings=None):
     breakdown_message = generate_messages(person_totals)
     total_cost = sum(person_totals.values())
     
@@ -129,13 +129,53 @@ def send_email(person_totals, custom_email_list=None, sender_email=None):
 
     api_instance = TransactionalEmailsApi(ApiClient(configuration))
 
+    # Build detailed breakdown if line_details and family_mappings are provided
+    detailed_breakdown = ""
+    if line_details and family_mappings:
+        detailed_breakdown = "<br/><br/><strong>Detailed Breakdown:</strong><br/>"
+        
+        # Group line details by family
+        family_line_details = {}
+        for family_id, family_name, line_id, line_name, line_number, line_device in family_mappings:
+            if family_name not in family_line_details:
+                family_line_details[family_name] = []
+            
+            # Find matching line in line_details
+            for line_key, line_data in line_details.items():
+                pdf_name = line_data.get('name')
+                pdf_number = line_data.get('number')
+                pdf_charge = line_data.get('charge', 0)
+                
+                if (pdf_name == line_name and pdf_number == line_number):
+                    family_line_details[family_name].append({
+                        'name': pdf_name,
+                        'device': line_data.get('device', ''),
+                        'number': pdf_number,
+                        'charge': pdf_charge
+                    })
+        
+        # Build detailed breakdown for each family
+        for family_name, lines in family_line_details.items():
+            detailed_breakdown += f"<br/><strong>{family_name}:</strong><br/>"
+            for line in lines:
+                detailed_breakdown += f"&nbsp;&nbsp;• {line['name']} ({line['device']}) {line['number']}: ${line['charge']:.2f}<br/>"
+            
+            # Add account-wide share if applicable
+            if family_name in person_totals:
+                family_total = person_totals[family_name]
+                lines_total = sum(line['charge'] for line in lines)
+                account_wide_share = family_total - lines_total
+                if abs(account_wide_share) > 0.01:  # Only show if significant
+                    detailed_breakdown += f"&nbsp;&nbsp;• Account-wide share: ${account_wide_share:.2f}<br/>"
+
     html_content = f"""
     Hey family!<br/><br/>
     
-    This month's verizon bill is ${total_cost}.<br/><br/>
+    <strong>Total cost for the month: ${total_cost:.2f}</strong><br/><br/>
     
-    Here's the breakdown: <br/>
-    {breakdown_message}<br/>
+    <strong>Family Breakdown:</strong><br/>
+    {breakdown_message}
+    {detailed_breakdown}<br/>
         
     Please pay up.<br/><br/>
 
