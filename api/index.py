@@ -1281,22 +1281,27 @@ def create_families():
         
         cur = conn.cursor()
         
-        # Delete existing families for this user
+        # Check for existing families to avoid duplicates
         cur.execute("""
-            DELETE FROM group_bill_automation.bill_automator_families 
+            SELECT family FROM group_bill_automation.bill_automator_families 
             WHERE user_id = %s
         """, (request.user_id,))
         
-        # Insert new families
+        existing_families = {row[0] for row in cur.fetchall()}
+        
+        # Insert only new families
         family_ids = []
+        new_families = []
         for family_name in data['families']:
-            cur.execute("""
-                INSERT INTO group_bill_automation.bill_automator_families 
-                (user_id, family, created_at, updated_at)
-                VALUES (%s, %s, NOW(), NOW())
-                RETURNING id
-            """, (request.user_id, family_name))
-            family_ids.append(cur.fetchone()[0])
+            if family_name not in existing_families:
+                cur.execute("""
+                    INSERT INTO group_bill_automation.bill_automator_families 
+                    (user_id, family, created_at, updated_at)
+                    VALUES (%s, %s, NOW(), NOW())
+                    RETURNING id
+                """, (request.user_id, family_name))
+                family_ids.append(cur.fetchone()[0])
+                new_families.append(family_name)
         
         conn.commit()
         cur.close()
@@ -1304,7 +1309,7 @@ def create_families():
         
         return jsonify({
             "message": f"Families created successfully",
-            "families": data['families'],
+            "families": new_families,
             "family_ids": family_ids
         }), 201
         
@@ -1475,6 +1480,7 @@ def create_emails():
 @require_auth
 def update_emails():
     """Update emails for the authenticated user."""
+    
     try:
         data = request.get_json()
         if not data or 'emails' not in data or not isinstance(data['emails'], list):
@@ -1486,29 +1492,41 @@ def update_emails():
         
         cur = conn.cursor()
         
-        # Delete existing emails for this user
+        # Check if user already has an emails record
         cur.execute("""
-            DELETE FROM group_bill_automation.bill_automator_emails 
+            SELECT id FROM group_bill_automation.bill_automator_emails 
             WHERE user_id = %s
         """, (request.user_id,))
         
-        # Insert new emails
-        for email in data['emails']:
-            cur.execute("""
-                INSERT INTO group_bill_automation.bill_automator_emails 
-                (user_id, emails, created_at, updated_at)
-                VALUES (%s, %s, NOW(), NOW())
-            """, (request.user_id, [email]))
+        existing_record = cur.fetchone()
         
+        if existing_record:
+            # Update existing record
+            cur.execute("""
+                UPDATE group_bill_automation.bill_automator_emails 
+                SET emails = %s, updated_at = NOW()
+                WHERE user_id = %s
+                RETURNING id, emails
+            """, (data['emails'], request.user_id))
+        else:
+            # Create new record
+            cur.execute("""
+                INSERT INTO group_bill_automation.bill_automator_emails (user_id, emails, created_at, updated_at)
+                VALUES (%s, %s, NOW(), NOW())
+                RETURNING id, emails
+            """, (request.user_id, data['emails']))
+        
+        email_data = cur.fetchone()
         conn.commit()
+        
         cur.close()
         conn.close()
         
         return jsonify({
-            "message": f"Emails updated successfully",
-            "emails": data['emails']
-        })
-        
+            "message": "Emails updated successfully",
+            "emails": email_data[1]
+        }), 200
+    
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
