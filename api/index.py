@@ -1052,11 +1052,57 @@ def parse_pdf():
         pdf_bytes = pdf_file.read()
         
         try:
-            # Import parse_verizon functions
-            import parse_verizon
+            # Import fitz directly
+            import fitz
+            import re
             
-            # Extract charges using the same approach as parse_verizon.py
-            account_wide_value, line_details = parse_verizon.extract_charges_from_pdf(pdf_bytes)
+            # Create a temporary file-like object from bytes
+            import io
+            pdf_stream = io.BytesIO(pdf_bytes)
+            
+            # Open the PDF from the stream
+            doc = fitz.open("pdf", pdf_stream)
+            
+            account_wide_value = 0.0
+            line_details = {}
+            phone_pattern = r'\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}'
+
+            for page in doc:
+                lines = page.get_text("text").split("\n")
+
+                for i in range(1, len(lines) - 2):  # need room for i+2
+                    line = lines[i].strip()
+
+                    if line.startswith("$") or re.match(r"^-?\$\d", line):
+                        prev_line = lines[i - 1].strip()
+                        try:
+                            amount = float(line.replace("$", "").replace(",", ""))
+
+                            if prev_line == "Account-wide charges & credits":
+                                account_wide_value = amount
+                            else:
+                                # Only consider if i+2 has a phone number
+                                candidate = lines[i + 2].strip()
+                                phone_match = re.search(phone_pattern, candidate)
+
+                                if phone_match:
+                                    number = phone_match.group()
+                                    device = lines[i + 1].strip()
+
+                                    # Create a unique key using name + device + number
+                                    unique_key = f"{prev_line} | {device} | {number}"
+
+                                    line_details[unique_key] = {
+                                        "name": prev_line,
+                                        "device": device,
+                                        "number": number,
+                                        "charge": amount
+                                    }
+
+                        except ValueError:
+                            continue
+            
+            doc.close()
             
             return jsonify({
                 "success": True,
@@ -1064,6 +1110,14 @@ def parse_pdf():
                 "line_details": line_details
             })
             
+        except ImportError as e:
+            if "fitz" in str(e):
+                return jsonify({
+                    "error": "PDF parsing is temporarily unavailable. Please try again in a few minutes after the deployment completes.",
+                    "details": "The PDF parsing module is being installed."
+                }), 503
+            else:
+                return jsonify({"error": f"Failed to import required modules: {str(e)}"}), 500
         except Exception as e:
             return jsonify({"error": f"Failed to parse PDF: {str(e)}"}), 500
     
