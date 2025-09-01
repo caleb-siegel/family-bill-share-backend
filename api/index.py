@@ -1061,16 +1061,16 @@ def parse_pdf():
         try:
             print("Attempting to import parse_verizon...")
             # Import parse_verizon functions
-            
+            import parse_verizon
             print("parse_verizon imported successfully")
             
             print("Attempting to import fitz...")
-            
+            import fitz
             print("fitz imported successfully")
             
             print("Calling extract_charges_from_pdf...")
             # Extract charges using the same approach as parse_verizon.py
-            account_wide_value, line_details = extract_charges_from_pdf(pdf_bytes)
+            account_wide_value, line_details = parse_verizon.extract_charges_from_pdf(pdf_bytes)
             print(f"PDF parsing completed. Account-wide value: {account_wide_value}, Line details count: {len(line_details)}")
             
             return jsonify({
