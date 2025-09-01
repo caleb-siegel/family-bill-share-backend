@@ -497,7 +497,7 @@ def get_lines():
         
         # Get user's lines
         cur.execute("""
-            SELECT id, name, number, created_at, updated_at
+            SELECT id, name, number, device, created_at, updated_at
             FROM group_bill_automation.bill_automator_lines 
             WHERE user_id = %s 
             ORDER BY number
@@ -509,8 +509,9 @@ def get_lines():
                 "id": line[0],
                 "line_name": line[1],
                 "line_number": line[2],
-                "created_at": line[3].isoformat() if line[3] else None,
-                "updated_at": line[4].isoformat() if line[4] else None
+                "device": line[3],
+                "created_at": line[4].isoformat() if line[4] else None,
+                "updated_at": line[5].isoformat() if line[5] else None
             })
         
         cur.close()
@@ -550,10 +551,10 @@ def create_line():
         # Create the line
         cur.execute("""
             INSERT INTO group_bill_automation.bill_automator_lines 
-            (user_id, name, number, created_at, updated_at)
-            VALUES (%s, %s, %s, NOW(), NOW())
-            RETURNING id, name, number, created_at, updated_at
-        """, (request.user_id, data['line_name'], data['line_number']))
+            (user_id, name, number, device, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, NOW(), NOW())
+            RETURNING id, name, number, device, created_at, updated_at
+        """, (request.user_id, data['line_name'], data['line_number'], data.get('device', '')))
         
         line_data = cur.fetchone()
         conn.commit()
@@ -567,8 +568,9 @@ def create_line():
                 "id": line_data[0],
                 "line_name": line_data[1],
                 "line_number": line_data[2],
-                "created_at": line_data[3].isoformat() if line_data[3] else None,
-                "updated_at": line_data[4].isoformat() if line_data[4] else None
+                "device": line_data[3],
+                "created_at": line_data[4].isoformat() if line_data[4] else None,
+                "updated_at": line_data[5].isoformat() if line_data[5] else None
             }
         }), 201
         
@@ -615,10 +617,10 @@ def update_line(line_id):
         # Update the line
         cur.execute("""
             UPDATE group_bill_automation.bill_automator_lines 
-            SET name = %s, number = %s, updated_at = NOW()
+            SET name = %s, number = %s, device = %s, updated_at = NOW()
             WHERE id = %s AND user_id = %s
-            RETURNING id, name, number, created_at, updated_at
-        """, (data['line_name'], data['line_number'], line_id, request.user_id))
+            RETURNING id, name, number, device, created_at, updated_at
+        """, (data['line_name'], data['line_number'], data.get('device', ''), line_id, request.user_id))
         
         line_data = cur.fetchone()
         conn.commit()
@@ -632,8 +634,9 @@ def update_line(line_id):
                 "id": line_data[0],
                 "line_name": line_data[1],
                 "line_number": line_data[2],
-                "created_at": line_data[3].isoformat() if line_data[3] else None,
-                "updated_at": line_data[4].isoformat() if line_data[4] else None
+                "device": line_data[3],
+                "created_at": line_data[4].isoformat() if line_data[4] else None,
+                "updated_at": line_data[5].isoformat() if line_data[5] else None
             }
         })
         
@@ -690,7 +693,7 @@ def get_family_mappings():
         
         # Get user's family mappings with family and line information
         cur.execute("""
-            SELECT fm.id, fm.family_id, fm.line_id, f.family, l.name, l.number
+            SELECT fm.id, fm.family_id, fm.line_id, f.family, l.name, l.number, l.device
             FROM group_bill_automation.bill_automator_family_mapping fm
             JOIN group_bill_automation.bill_automator_families f ON fm.family_id = f.id
             JOIN group_bill_automation.bill_automator_lines l ON fm.line_id = l.id
@@ -706,7 +709,8 @@ def get_family_mappings():
                 "line_id": mapping[2],
                 "family": mapping[3],
                 "line_name": mapping[4],
-                "line_number": mapping[5]
+                "line_number": mapping[5],
+                "line_device": mapping[6]
             })
         
         cur.close()
