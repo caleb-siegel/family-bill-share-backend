@@ -1737,6 +1737,12 @@ def send_bill_emails():
         if not isinstance(family_totals, list):
             return jsonify({"error": "family_totals must be a list"}), 400
         
+        # Get additional data for detailed breakdown (optional)
+        line_details = data.get('line_details')
+        family_mappings = data.get('family_mappings')
+        line_adjustments = data.get('line_adjustments')
+        account_wide_value = data.get('account_wide_value')
+        
         # Get user's email addresses
         conn = get_db_connection()
         if not conn:
@@ -1786,7 +1792,11 @@ def send_bill_emails():
         import parse_verizon
         
         # Send the email using the existing functionality with user's email list
-        parse_verizon.send_email(person_totals, email_list, user_email)
+        # If detailed data is provided, use it for detailed breakdown
+        if line_details and family_mappings:
+            parse_verizon.send_email(person_totals, email_list, user_email, line_details, family_mappings, line_adjustments, account_wide_value)
+        else:
+            parse_verizon.send_email(person_totals, email_list, user_email)
         
         return jsonify({
             "success": True,
