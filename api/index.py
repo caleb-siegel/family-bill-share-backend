@@ -717,7 +717,7 @@ def get_family_mappings():
         cur.close()
         conn.close()
         
-        return jsonify({"family_mappings": mappings})
+        return jsonify({"mappings": mappings})
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1088,6 +1088,314 @@ def parse_pdf():
     
     except Exception as e:
         print(f"GENERAL ERROR: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/families', methods=['POST'])
+@require_auth
+def create_families():
+    """Create families for the authenticated user."""
+    try:
+        data = request.get_json()
+        if not data or 'families' not in data or not isinstance(data['families'], list):
+            return jsonify({"error": "Missing required field: families (must be an array)"}), 400
+        
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database connection failed"}), 500
+        
+        cur = conn.cursor()
+        
+        # Delete existing families for this user
+        cur.execute("""
+            DELETE FROM group_bill_automation.bill_automator_families 
+            WHERE user_id = %s
+        """, (request.user_id,))
+        
+        # Insert new families
+        family_ids = []
+        for family_name in data['families']:
+            cur.execute("""
+                INSERT INTO group_bill_automation.bill_automator_families 
+                (user_id, family, created_at, updated_at)
+                VALUES (%s, %s, NOW(), NOW())
+                RETURNING id
+            """, (request.user_id, family_name))
+            family_ids.append(cur.fetchone()[0])
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            "message": f"Families created successfully",
+            "families": data['families'],
+            "family_ids": family_ids
+        }), 201
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/families', methods=['PUT'])
+@require_auth
+def update_families():
+    """Update families for the authenticated user."""
+    try:
+        data = request.get_json()
+        if not data or 'families' not in data or not isinstance(data['families'], list):
+            return jsonify({"error": "Missing required field: families (must be an array)"}), 400
+        
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database connection failed"}), 500
+        
+        cur = conn.cursor()
+        
+        # Delete existing families for this user
+        cur.execute("""
+            DELETE FROM group_bill_automation.bill_automator_families 
+            WHERE user_id = %s
+        """, (request.user_id,))
+        
+        # Insert new families
+        family_ids = []
+        for family_name in data['families']:
+            cur.execute("""
+                INSERT INTO group_bill_automation.bill_automator_families 
+                (user_id, family, created_at, updated_at)
+                VALUES (%s, %s, NOW(), NOW())
+                RETURNING id
+            """, (request.user_id, family_name))
+            family_ids.append(cur.fetchone()[0])
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            "message": f"Families updated successfully",
+            "families": data['families'],
+            "family_ids": family_ids
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/families/add', methods=['POST'])
+@require_auth
+def add_family():
+    """Add a single family for the authenticated user."""
+    try:
+        data = request.get_json()
+        if not data or 'family' not in data:
+            return jsonify({"error": "Missing required field: family"}), 400
+        
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database connection failed"}), 500
+        
+        cur = conn.cursor()
+        
+        # Insert new family
+        cur.execute("""
+            INSERT INTO group_bill_automation.bill_automator_families 
+            (user_id, family, created_at, updated_at)
+            VALUES (%s, %s, NOW(), NOW())
+            RETURNING id, family
+        """, (request.user_id, data['family']))
+        
+        family_data = cur.fetchone()
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            "message": "Family added successfully",
+            "family": {
+                "id": family_data[0],
+                "family": family_data[1]
+            }
+        }), 201
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/emails', methods=['POST'])
+@require_auth
+def create_emails():
+    """Create emails for the authenticated user."""
+    try:
+        data = request.get_json()
+        if not data or 'emails' not in data or not isinstance(data['emails'], list):
+            return jsonify({"error": "Missing required field: emails (must be an array)"}), 400
+        
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database connection failed"}), 500
+        
+        cur = conn.cursor()
+        
+        # Delete existing emails for this user
+        cur.execute("""
+            DELETE FROM group_bill_automation.bill_automator_emails 
+            WHERE user_id = %s
+        """, (request.user_id,))
+        
+        # Insert new emails
+        for email in data['emails']:
+            cur.execute("""
+                INSERT INTO group_bill_automation.bill_automator_emails 
+                (user_id, emails, created_at, updated_at)
+                VALUES (%s, %s, NOW(), NOW())
+            """, (request.user_id, [email]))
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            "message": f"Emails created successfully",
+            "emails": data['emails']
+        }), 201
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/emails', methods=['PUT'])
+@require_auth
+def update_emails():
+    """Update emails for the authenticated user."""
+    try:
+        data = request.get_json()
+        if not data or 'emails' not in data or not isinstance(data['emails'], list):
+            return jsonify({"error": "Missing required field: emails (must be an array)"}), 400
+        
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database connection failed"}), 500
+        
+        cur = conn.cursor()
+        
+        # Delete existing emails for this user
+        cur.execute("""
+            DELETE FROM group_bill_automation.bill_automator_emails 
+            WHERE user_id = %s
+        """, (request.user_id,))
+        
+        # Insert new emails
+        for email in data['emails']:
+            cur.execute("""
+                INSERT INTO group_bill_automation.bill_automator_emails 
+                (user_id, emails, created_at, updated_at)
+                VALUES (%s, %s, NOW(), NOW())
+            """, (request.user_id, [email]))
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            "message": f"Emails updated successfully",
+            "emails": data['emails']
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/emails/add', methods=['POST'])
+@require_auth
+def add_email():
+    """Add a single email for the authenticated user."""
+    try:
+        data = request.get_json()
+        if not data or 'email' not in data:
+            return jsonify({"error": "Missing required field: email"}), 400
+        
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database connection failed"}), 500
+        
+        cur = conn.cursor()
+        
+        # Insert new email
+        cur.execute("""
+            INSERT INTO group_bill_automation.bill_automator_emails 
+            (user_id, emails, created_at, updated_at)
+            VALUES (%s, %s, NOW(), NOW())
+            RETURNING id
+        """, (request.user_id, [data['email']]))
+        
+        email_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            "message": "Email added successfully",
+            "email_id": email_id,
+            "email": data['email']
+        }), 201
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/save-selected-lines', methods=['POST'])
+@require_auth
+def save_selected_lines():
+    """Save only the selected lines to the database."""
+    
+    try:
+        data = request.get_json()
+        if not data or 'lines' not in data or not isinstance(data['lines'], list):
+            return jsonify({"error": "Missing required field: lines (must be an array)"}), 400
+        
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database connection failed"}), 500
+        
+        cur = conn.cursor()
+        saved_lines = []
+        
+        for line in data['lines']:
+            if line.get('selected', False) and not line.get('exists', False):
+                # Only save new lines that are selected
+                cur.execute("""
+                    INSERT INTO group_bill_automation.bill_automator_lines 
+                    (user_id, name, number, device, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, NOW(), NOW())
+                    RETURNING id
+                """, (request.user_id, line['name'], line['number'], line['device']))
+                
+                line_id = cur.fetchone()[0]
+                
+                # If line has a family assigned, create the family mapping
+                if line.get('family'):
+                    family_id = line['family']
+                    cur.execute("""
+                        INSERT INTO group_bill_automation.bill_automator_family_mapping 
+                        (family_id, line_id) 
+                        VALUES (%s, %s)
+                    """, (family_id, line_id))
+                
+                saved_lines.append({
+                    **line,
+                    "id": line_id,
+                    "exists": True
+                })
+            elif line.get('exists', False):
+                # Keep existing lines as they are
+                saved_lines.append(line)
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            "success": True,
+            "message": f"Successfully saved {len(saved_lines)} lines",
+            "saved_lines": saved_lines
+        })
+        
+    except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
