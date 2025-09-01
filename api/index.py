@@ -474,5 +474,350 @@ def signout():
     # The client should discard the token
     return jsonify({"message": "Signed out successfully"})
 
+@app.route('/api/lines', methods=['GET'])
+@require_auth
+def get_lines():
+    """Get all lines for the current user."""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database connection failed"}), 500
+        
+        cur = conn.cursor()
+        
+        # Get user's lines
+        cur.execute("""
+            SELECT id, line_name, line_number, created_at, updated_at
+            FROM group_bill_automation.bill_automator_lines 
+            WHERE user_id = %s 
+            ORDER BY line_number
+        """, (request.user_id,))
+        
+        lines = []
+        for line in cur.fetchall():
+            lines.append({
+                "id": line[0],
+                "line_name": line[1],
+                "line_number": line[2],
+                "created_at": line[3].isoformat() if line[3] else None,
+                "updated_at": line[4].isoformat() if line[4] else None
+            })
+        
+        cur.close()
+        conn.close()
+        
+        return jsonify({"lines": lines})
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/lines', methods=['POST'])
+@require_auth
+def create_line():
+    """Create a new line for the current user."""
+    try:
+        data = request.get_json()
+        if not data or 'line_name' not in data or 'line_number' not in data:
+            return jsonify({"error": "Missing required fields: line_name, line_number"}), 400
+        
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database connection failed"}), 500
+        
+        cur = conn.cursor()
+        
+        # Check if line number already exists for this user
+        cur.execute("""
+            SELECT id FROM group_bill_automation.bill_automator_lines 
+            WHERE user_id = %s AND line_number = %s
+        """, (request.user_id, data['line_number']))
+        
+        if cur.fetchone():
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Line number already exists for this user"}), 409
+        
+        # Create the line
+        cur.execute("""
+            INSERT INTO group_bill_automation.bill_automator_lines 
+            (user_id, line_name, line_number, created_at, updated_at)
+            VALUES (%s, %s, %s, NOW(), NOW())
+            RETURNING id, line_name, line_number, created_at, updated_at
+        """, (request.user_id, data['line_name'], data['line_number']))
+        
+        line_data = cur.fetchone()
+        conn.commit()
+        
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            "message": "Line created successfully",
+            "line": {
+                "id": line_data[0],
+                "line_name": line_data[1],
+                "line_number": line_data[2],
+                "created_at": line_data[3].isoformat() if line_data[3] else None,
+                "updated_at": line_data[4].isoformat() if line_data[4] else None
+            }
+        }), 201
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/lines/<int:line_id>', methods=['PUT'])
+@require_auth
+def update_line(line_id):
+    """Update an existing line."""
+    try:
+        data = request.get_json()
+        if not data or 'line_name' not in data or 'line_number' not in data:
+            return jsonify({"error": "Missing required fields: line_name, line_number"}), 400
+        
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database connection failed"}), 500
+        
+        cur = conn.cursor()
+        
+        # Check if line belongs to user
+        cur.execute("""
+            SELECT id FROM group_bill_automation.bill_automator_lines 
+            WHERE id = %s AND user_id = %s
+        """, (line_id, request.user_id))
+        
+        if not cur.fetchone():
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Line not found"}), 404
+        
+        # Check if new line number conflicts with existing line
+        cur.execute("""
+            SELECT id FROM group_bill_automation.bill_automator_lines 
+            WHERE user_id = %s AND line_number = %s AND id != %s
+        """, (request.user_id, data['line_number'], line_id))
+        
+        if cur.fetchone():
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Line number already exists for this user"}), 409
+        
+        # Update the line
+        cur.execute("""
+            UPDATE group_bill_automation.bill_automator_lines 
+            SET line_name = %s, line_number = %s, updated_at = NOW()
+            WHERE id = %s AND user_id = %s
+            RETURNING id, line_name, line_number, created_at, updated_at
+        """, (data['line_name'], data['line_number'], line_id, request.user_id))
+        
+        line_data = cur.fetchone()
+        conn.commit()
+        
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            "message": "Line updated successfully",
+            "line": {
+                "id": line_data[0],
+                "line_name": line_data[1],
+                "line_number": line_data[2],
+                "created_at": line_data[3].isoformat() if line_data[3] else None,
+                "updated_at": line_data[4].isoformat() if line_data[4] else None
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/lines/<int:line_id>', methods=['DELETE'])
+@require_auth
+def delete_line(line_id):
+    """Delete a line."""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database connection failed"}), 500
+        
+        cur = conn.cursor()
+        
+        # Check if line belongs to user
+        cur.execute("""
+            SELECT id FROM group_bill_automation.bill_automator_lines 
+            WHERE id = %s AND user_id = %s
+        """, (line_id, request.user_id))
+        
+        if not cur.fetchone():
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Line not found"}), 404
+        
+        # Delete the line
+        cur.execute("""
+            DELETE FROM group_bill_automation.bill_automator_lines 
+            WHERE id = %s AND user_id = %s
+        """, (line_id, request.user_id))
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({"message": "Line deleted successfully"})
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/family-mappings', methods=['GET'])
+@require_auth
+def get_family_mappings():
+    """Get all family mappings for the current user."""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database connection failed"}), 500
+        
+        cur = conn.cursor()
+        
+        # Get user's family mappings with family and line information
+        cur.execute("""
+            SELECT fm.id, fm.family_id, fm.line_id, f.family, l.line_name, l.line_number
+            FROM group_bill_automation.bill_automator_family_mapping fm
+            JOIN group_bill_automation.bill_automator_families f ON fm.family_id = f.id
+            JOIN group_bill_automation.bill_automator_lines l ON fm.line_id = l.id
+            WHERE f.user_id = %s
+            ORDER BY f.family, l.line_number
+        """, (request.user_id,))
+        
+        mappings = []
+        for mapping in cur.fetchall():
+            mappings.append({
+                "id": mapping[0],
+                "family_id": mapping[1],
+                "line_id": mapping[2],
+                "family": mapping[3],
+                "line_name": mapping[4],
+                "line_number": mapping[5]
+            })
+        
+        cur.close()
+        conn.close()
+        
+        return jsonify({"family_mappings": mappings})
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/family-mappings', methods=['POST'])
+@require_auth
+def create_family_mapping():
+    """Create a new family mapping."""
+    try:
+        data = request.get_json()
+        if not data or 'family_id' not in data or 'line_id' not in data:
+            return jsonify({"error": "Missing required fields: family_id, line_id"}), 400
+        
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database connection failed"}), 500
+        
+        cur = conn.cursor()
+        
+        # Check if family belongs to user
+        cur.execute("""
+            SELECT id FROM group_bill_automation.bill_automator_families 
+            WHERE id = %s AND user_id = %s
+        """, (data['family_id'], request.user_id))
+        
+        if not cur.fetchone():
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Family not found"}), 404
+        
+        # Check if line belongs to user
+        cur.execute("""
+            SELECT id FROM group_bill_automation.bill_automator_lines 
+            WHERE id = %s AND user_id = %s
+        """, (data['line_id'], request.user_id))
+        
+        if not cur.fetchone():
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Line not found"}), 404
+        
+        # Check if mapping already exists
+        cur.execute("""
+            SELECT id FROM group_bill_automation.bill_automator_family_mapping 
+            WHERE family_id = %s AND line_id = %s
+        """, (data['family_id'], data['line_id']))
+        
+        if cur.fetchone():
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Family mapping already exists"}), 409
+        
+        # Create the mapping
+        cur.execute("""
+            INSERT INTO group_bill_automation.bill_automator_family_mapping 
+            (family_id, line_id)
+            VALUES (%s, %s)
+            RETURNING id, family_id, line_id
+        """, (data['family_id'], data['line_id']))
+        
+        mapping_data = cur.fetchone()
+        conn.commit()
+        
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            "message": "Family mapping created successfully",
+            "family_mapping": {
+                "id": mapping_data[0],
+                "family_id": mapping_data[1],
+                "line_id": mapping_data[2]
+            }
+        }), 201
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/family-mappings/<int:mapping_id>', methods=['DELETE'])
+@require_auth
+def delete_family_mapping(mapping_id):
+    """Delete a family mapping."""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database connection failed"}), 500
+        
+        cur = conn.cursor()
+        
+        # Check if mapping belongs to user's family
+        cur.execute("""
+            SELECT fm.id FROM group_bill_automation.bill_automator_family_mapping fm
+            JOIN group_bill_automation.bill_automator_families f ON fm.family_id = f.id
+            WHERE fm.id = %s AND f.user_id = %s
+        """, (mapping_id, request.user_id))
+        
+        if not cur.fetchone():
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Family mapping not found"}), 404
+        
+        # Delete the mapping
+        cur.execute("""
+            DELETE FROM group_bill_automation.bill_automator_family_mapping 
+            WHERE id = %s
+        """, (mapping_id,))
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({"message": "Family mapping deleted successfully"})
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5001)
