@@ -1073,10 +1073,71 @@ def parse_pdf():
             account_wide_value, line_details = parse_verizon.extract_charges_from_pdf(pdf_bytes)
             print(f"PDF parsing completed. Account-wide value: {account_wide_value}, Line details count: {len(line_details)}")
             
+            # Get existing lines from database for this user
+            conn = get_db_connection()
+            if not conn:
+                return jsonify({"error": "Database connection failed"}), 500
+            
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT id, name, number, device
+                FROM group_bill_automation.bill_automator_lines 
+                WHERE user_id = %s
+            """, (request.user_id,))
+            
+            existing_lines = {}
+            for line in cur.fetchall():
+                # Create a composite key using name and number only
+                composite_key = f"{line[1]}|{line[2]}"  # name|number
+                existing_lines[composite_key] = {
+                    "id": line[0],
+                    "name": line[1],
+                    "number": line[2],
+                    "device": line[3],
+                    "exists": True
+                }
+            
+            cur.close()
+            conn.close()
+            
+            # Process parsed line details and check against existing lines
+            parsed_lines = []
+            
+            for unique_key, line_detail in line_details.items():
+                name = line_detail["name"]
+                device = line_detail["device"]
+                number = line_detail["number"]
+                charge = line_detail["charge"]
+                
+                # Create composite key for this parsed line
+                parsed_composite_key = f"{name}|{number}"
+                
+                exists = parsed_composite_key in existing_lines and number != 'Unknown'
+                
+                line_data = {
+                    "unique_key": unique_key,
+                    "name": name,
+                    "number": number,
+                    "device": device,
+                    "charge": charge,
+                    "exists": exists,
+                    "selected": False  # User will select which lines to save
+                }
+                
+                if line_data["exists"]:
+                    # Reference existing line
+                    existing_line = existing_lines[parsed_composite_key]
+                    line_data["id"] = existing_line["id"]
+                
+                parsed_lines.append(line_data)
+            
             return jsonify({
                 "success": True,
-                "account_wide_value": account_wide_value,
-                "line_details": line_details
+                "lines": parsed_lines,
+                "existing_lines_count": len([line for line in parsed_lines if line["exists"]]),
+                "new_lines_count": len([line for line in parsed_lines if not line["exists"]]),
+                "total_charge": sum(line["charge"] for line in parsed_lines),
+                "account_wide_value": account_wide_value
             })
             
         except ImportError as e:
