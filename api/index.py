@@ -507,8 +507,8 @@ def get_lines():
         for line in cur.fetchall():
             lines.append({
                 "id": line[0],
-                "line_name": line[1],
-                "line_number": line[2],
+                "name": line[1],
+                "number": line[2],
                 "device": line[3],
                 "created_at": line[4].isoformat() if line[4] else None,
                 "updated_at": line[5].isoformat() if line[5] else None
@@ -566,8 +566,8 @@ def create_line():
             "message": "Line created successfully",
             "line": {
                 "id": line_data[0],
-                "line_name": line_data[1],
-                "line_number": line_data[2],
+                "name": line_data[1],
+                "number": line_data[2],
                 "device": line_data[3],
                 "created_at": line_data[4].isoformat() if line_data[4] else None,
                 "updated_at": line_data[5].isoformat() if line_data[5] else None
@@ -632,8 +632,8 @@ def update_line(line_id):
             "message": "Line updated successfully",
             "line": {
                 "id": line_data[0],
-                "line_name": line_data[1],
-                "line_number": line_data[2],
+                "name": line_data[1],
+                "number": line_data[2],
                 "device": line_data[3],
                 "created_at": line_data[4].isoformat() if line_data[4] else None,
                 "updated_at": line_data[5].isoformat() if line_data[5] else None
@@ -707,7 +707,7 @@ def get_family_mappings():
                 "id": mapping[0],
                 "family_id": mapping[1],
                 "line_id": mapping[2],
-                "family": mapping[3],
+                "family_name": mapping[3],
                 "line_name": mapping[4],
                 "line_number": mapping[5],
                 "line_device": mapping[6]
@@ -831,6 +831,208 @@ def delete_family_mapping(mapping_id):
         return jsonify({"message": "Family mapping deleted successfully"})
         
     except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/accountwide-reconciliation', methods=['GET'])
+@require_auth
+def get_accountwide_reconciliation():
+    """Get account-wide reconciliation for the current user."""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database connection failed"}), 500
+        
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT reconciliation 
+            FROM group_bill_automation.bill_automator_accountwide_reconciliation 
+            WHERE user_id = %s
+        """, (request.user_id,))
+        
+        result = cur.fetchone()
+        cur.close()
+        conn.close()
+        
+        if result:
+            return jsonify({
+                "success": True,
+                "reconciliation": result[0]
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "reconciliation": None
+            })
+    
+    except Exception as e:
+        print(f"Error getting account-wide reconciliation: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/accountwide-reconciliation', methods=['POST'])
+@require_auth
+def save_accountwide_reconciliation():
+    """Save account-wide reconciliation settings for the current user."""
+    try:
+        data = request.get_json()
+        if not data or 'reconciliation' not in data:
+            return jsonify({"error": "Missing required field: reconciliation"}), 400
+        
+        reconciliation = data['reconciliation']
+        
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database connection failed"}), 500
+        
+        cur = conn.cursor()
+        
+        # Delete any existing reconciliation for this user
+        cur.execute("""
+            DELETE FROM group_bill_automation.bill_automator_accountwide_reconciliation 
+            WHERE user_id = %s
+        """, (request.user_id,))
+        
+        # Insert new reconciliation
+        cur.execute("""
+            INSERT INTO group_bill_automation.bill_automator_accountwide_reconciliation 
+            (user_id, reconciliation) 
+            VALUES (%s, %s)
+            RETURNING id
+        """, (request.user_id, reconciliation))
+        
+        reconciliation_id = cur.fetchone()[0]
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            "success": True,
+            "message": "Account-wide reconciliation saved successfully",
+            "reconciliation_id": reconciliation_id
+        })
+    
+    except Exception as e:
+        print(f"Error saving account-wide reconciliation: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/line-discount-transfer', methods=['GET'])
+@require_auth
+def get_line_discount_transfer():
+    """Get line discount transfer for the current user."""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database connection failed"}), 500
+        
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT transfer_amount, line_to_remove_from, line_to_add_to
+            FROM group_bill_automation.bill_automator_line_discount_transfer_adjustment 
+            WHERE user_id = %s
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, (request.user_id,))
+        
+        result = cur.fetchone()
+        cur.close()
+        conn.close()
+        
+        if result:
+            return jsonify({
+                "success": True,
+                "transfer": {
+                    "transfer_amount": result[0],
+                    "line_to_remove_from": result[1],
+                    "line_to_add_to": result[2]
+                }
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "transfer": None
+            })
+    
+    except Exception as e:
+        print(f"Error getting line discount transfer: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/line-discount-transfer', methods=['POST'])
+@require_auth
+def save_line_discount_transfer():
+    """Save line discount transfer adjustment for the current user."""
+    try:
+        data = request.get_json()
+        if not data or 'transfer_amount' not in data or 'line_to_remove_from' not in data or 'line_to_add_to' not in data:
+            return jsonify({"error": "Missing required fields: transfer_amount, line_to_remove_from, line_to_add_to"}), 400
+        
+        transfer_amount = float(data['transfer_amount'])
+        line_to_remove_from = int(data['line_to_remove_from'])
+        line_to_add_to = int(data['line_to_add_to'])
+        
+        if transfer_amount <= 0:
+            return jsonify({"error": "Transfer amount must be greater than 0"}), 400
+        
+        if line_to_remove_from == line_to_add_to:
+            return jsonify({"error": "Cannot transfer to the same line"}), 400
+        
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({"error": "Database connection failed"}), 500
+        
+        cur = conn.cursor()
+        
+        # Verify that both lines exist and belong to this user
+        cur.execute("""
+            SELECT id FROM group_bill_automation.bill_automator_lines 
+            WHERE id IN (%s, %s) AND user_id = %s
+        """, (line_to_remove_from, line_to_add_to, request.user_id))
+        
+        lines = cur.fetchall()
+        if len(lines) != 2:
+            return jsonify({"error": "One or both lines not found or do not belong to user"}), 400
+        
+        # Check if an existing transfer exists for this user with the same remove/add lines
+        cur.execute("""
+            SELECT id FROM group_bill_automation.bill_automator_line_discount_transfer_adjustment 
+            WHERE user_id = %s AND line_to_remove_from = %s AND line_to_add_to = %s
+        """, (request.user_id, line_to_remove_from, line_to_add_to))
+        
+        existing_transfer = cur.fetchone()
+        
+        if existing_transfer:
+            # Update existing transfer
+            cur.execute("""
+                UPDATE group_bill_automation.bill_automator_line_discount_transfer_adjustment 
+                SET transfer_amount = %s, updated_at = NOW()
+                WHERE id = %s
+            """, (transfer_amount, existing_transfer[0]))
+            
+            transfer_id = existing_transfer[0]
+            message = "Line discount transfer updated successfully"
+        else:
+            # Insert new transfer
+            cur.execute("""
+                INSERT INTO group_bill_automation.bill_automator_line_discount_transfer_adjustment 
+                (user_id, transfer_amount, line_to_remove_from, line_to_add_to) 
+                VALUES (%s, %s, %s, %s)
+                RETURNING id
+            """, (request.user_id, transfer_amount, line_to_remove_from, line_to_add_to))
+            
+            transfer_id = cur.fetchone()[0]
+            message = "Line discount transfer saved successfully"
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            "success": True,
+            "message": message,
+            "transfer_id": transfer_id
+        })
+    
+    except ValueError:
+        return jsonify({"error": "Invalid transfer amount"}), 400
+    except Exception as e:
+        print(f"Error saving line discount transfer: {e}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
